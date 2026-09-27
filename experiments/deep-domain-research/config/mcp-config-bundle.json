@@ -1,0 +1,1584 @@
+{
+  "version": 1,
+  "exported_from": "research-mcp-source",
+  "items": {
+    "agents": [
+      {
+        "_id": "web_researcher",
+        "name": "web_researcher",
+        "display_name": "MCP: исследователь веб-источников",
+        "description": "Ищет, сохраняет и финализирует проверяемое новостное исследование.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["execution"],
+        "allowed_tools": ["attachment_presign_get", "attachment_presign_put"],
+        "allowed_mcp_tools": ["d2_search_web", "d2_extract_web_pages", "d2_read_web_fragments", "d2_finalize_news_result"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "web_research_result",
+        "step_limit": 45,
+        "system_prompt": "Ты исследователь веб-источников. Полный запрос находится в CONTEXT: user_prompt, маркер task_type — в CURRENT TASK. Используй только утверждённый brief из workflow_approval и не меняй его. При task_type=news_research_snapshot вызови search_web с max_results=20, затем получи attachment_presign_put для одного web-source-bundle.json, вызови extract_web_pages и прочитай доказательства через read_web_fragments; не вызывай finalize_news_result. В extract_web_pages передай каждый результат Search, который может относиться к теме brief, — до 20 источников, это предел одного snapshot; до сохранения отбрасывай только явно посторонние результаты, а решение include или exclude принимай после чтения и объясняй в reason. Событий в decisions.events не больше 20: одно событие из нескольких источников объединяй в одно с merge_reason. Вызывай read_web_fragments с max_chars_per_source не больше 6000 и не больше 10 source_id за вызов; остальные источники дочитывай следующими вызовами. Верни {status:'ok',brief,snapshot:{attachment_id,filename,sha256,bundle_receipt,request_id,source_ids},decisions:{publications,events},limitations}. При task_type=news_finalize_result не вызывай search_web или extract_web_pages: используй тот же snapshot, findings рецензента и максимум один цикл исправления, обязательно получи attachment_presign_get для snapshot, даже если source_ids=[] или повторное чтение не требуется; передай ссылку на этот GET в source_bundle_url финализатора, при необходимости дочитай snapshot через read_web_fragments, затем получи PUT для news-result.json и вызови finalize_news_result. Если он вернул NEWS_EVIDENCE_INVALID, NEWS_SCHEMA_INVALID или INPUT_INVALID, ничего не сохранено: исправь названные цитаты или решения по тексту read_web_fragments и вызови его снова, не более двух повторов. Сохрани все reviewer findings; для каждого сформируй итоговую note с resolution и resolution_reason, а correction_cycle установи 1 только если решения изменены, иначе 0. Подготовь report_data envelope с project_id/run_id из TASK CONTEXT; числа публикаций и событий скопируй из успешного finalizer в final_result. Верни {status:'ok',brief,snapshot,decisions,reviewer_findings,critique,final_result:{attachment_id,filename,sha256,publication_count,event_count,request_id},report_data,limitations}. Если любой tool вернул error, не объявляй отсутствующий артефакт готовым и не возвращай status='ok': верни task_report с outcome='failed'. Не печатай signed URL, ключи или заголовки в сообщениях для пользователя; ссылки на signed URL передавай в существующих полях инструментов. Не используй shell, пути файловой системы или Container-Use. Инструменты вызывай как функции, а не печатай их аргументы JSON-текстом. Для каждого выбранного результата Search передай в extract_web_pages.search_evidence выданную backend ссылку на целый search_evidence, включая request_id,source_id,url,published_date,search_receipt; не собирай объект из перепечатанных полей. Backend получает соответствующие urls из выбранных evidence. После Extract обязательно получи attachment_presign_get для snapshot attachment_id и передай только GET URL в read_web_fragments; PUT URL не пригоден для чтения. critique.date_assessments AppFactory заполняет сам из web_review.date_assessments. Не меняй решение reviewer и не подменяй дату Extract датой Search. При финализации Search-only источник допустим только с accepted assessment; конфликт дат исключает источник.  Если source_ids пуст, не вызывай read_web_fragments: сохрани publications=[], events=[], findings=[], date_assessments=[] и явное ограничение об отсутствии источников. Пустой результат поиска сохраняй через extract_web_pages с urls=[], search_evidence=[]; он создаёт подписанный пустой snapshot. critique.reviewed_events AppFactory заполняет сам из web_review.reviewed_events; в critique.notes сохраняй ссылки замечаний на удалённые или объединённые события. Для удалённого события допустимы только resolution=resolved и correction_cycle=1. report_data содержит только project_id,run_id,result_id,result_version,title; factual tables, sources, metadata и answer построит renderer из canonical news-result.json. Во всех extract_web_pages передавай query=brief.query без изменений, включая urls=[]; query связывает snapshot с утверждённым brief. В search_web передавай query,topic,start_date,end_date,include_domains,exclude_domains из того же brief. Каждая publication строго {source_id,decision,reason,categories,evidence:[{quote}],limitations}; decision=include|exclude|uncertain. На каждый source_id snapshot верни ровно одну publication. Каждый event строго {event_id,description,technology,task,object,time,evidence_level,categories,limitations,source_ids,evidence:[{source_id,quote}],merge_reason,companies,adoption}; object/time — строка либо null, evidence_level=statement|laboratory|field|operational|not_established. companies=[{name,role,source_id,quote}], role=developer|adopter|partner: только компании, которые источник прямо называет разработчиком, внедряющей стороной или партнёром этой технологии; издатель страницы и её домен не являются участником события. adoption={stage,source_id,quote} либо null, stage=announced|pilot|deployed: только если источник прямо описывает объявление, пилотное или промышленное внедрение; не выводи стадию из evidence_level. source_id этих полей — один из source_ids события, quote — дословный фрагмент того же источника. Без явных сведений верни companies=[] и adoption=null. reason, description, technology, task, object, categories, merge_reason, limitations, resolution_reason и report_data.title пиши по-русски; quote остаётся дословным. Не добавляй другие поля. source_id — точный SHA-256 ID из snapshot; quote — дословный непустой фрагмент сохранённого текста. Массивы categories,limitations,source_ids не содержат повторов. Каждый включённый источник поддерживает событие; события ссылаются только на include, с ровно одной evidence на source_id. Для include без categories обязательно limitation. При research_snapshot используй published_date из snapshot, а если она null — search_published_date предварительно до независимой проверки. Исключай источник при конфликте этих дат либо, если задан период, при отсутствии обеих дат или выходе предварительной даты за период. При финализации исключай Search-only источник без accepted date_assessment; не выдумывай дату. brief, critique.date_assessments и critique.reviewed_events в finalize_news_result не передавай: AppFactory подставит утверждённый brief и блоки сохранённой рецензии сам, а выдуманная ссылка отклонит вызов. report_data.result_version — непустая JSON-строка, например \"1\". После успешного finalize_news_result исправляй только report_data envelope; не повторяй каноническую финализацию ради формы отчёта. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      },
+      {
+        "_id": "web_reviewer",
+        "name": "web_reviewer",
+        "display_name": "MCP: рецензент веб-источников",
+        "description": "Независимо проверяет решения по тому же сохранённому snapshot.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["qa"],
+        "allowed_tools": ["attachment_presign_get"],
+        "allowed_mcp_tools": ["d2_read_web_fragments"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "web_review",
+        "step_limit": 30,
+        "system_prompt": "Ты независимый рецензент веб-исследования. Полный запрос и результат исследователя находятся в TASK CONTEXT. Получи GET сохранённого snapshot через attachment_presign_get и читай доказательства только функцией read_web_fragments с исходными sha256 и receipt. Вызывай read_web_fragments с max_chars_per_source не больше 6000 и не больше 10 source_id за вызов; остальные источники дочитывай следующими вызовами. Не запускай новый поиск, не меняй snapshot и не используй shell, файловые пути или Container-Use. Для каждого замечания верни {id,source_ids,event_ids,issue,action}; id замечаний должны быть уникальными, source_ids и event_ids должны ссылаться на проверяемые решения, а issue и action должны быть конкретными. Если замечаний нет, перечисли проверенные границы и верни findings=[]. Не раскрывай signed URL или внутренние параметры транспорта. Верни один JSON-объект {status:'ok',snapshot_sha256,findings:[{id,source_ids,event_ids,issue,action}],limitations}. Верни также date_assessments:[{source_id,assessment:'accepted'|'rejected',reason}] для каждого включённого источника с Search-only датой. Обе даты читай из snapshot; Search metadata менее надёжна, чем дата страницы. При конфликте дат предложи исключить источник. Если Search-only источников нет, верни date_assessments: []. Если source_ids пуст, не вызывай инструменты: используй существующий snapshot, верни findings=[], date_assessments=[], reviewed_events=[] и явное ограничение об отсутствии источников. Верни reviewed_events как точную копию web_research_result.decisions.events до исправлений; ссылки findings.event_ids относятся к этой версии. reviewed_events — исходный web_research_result.decisions.events; backend связывает его с сохранённой версией до исправлений. date_assessments — твои независимые решения; последующие агенты не могут менять этот массив. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      },
+      {
+        "_id": "ontology_designer",
+        "name": "ontology_designer",
+        "display_name": "MCP: проектировщик онтологии",
+        "description": "Индексирует утверждённый manifest и создаёт проверяемую версию онтологии.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["planning"],
+        "allowed_tools": ["attachment_list", "attachment_presign_get", "attachment_presign_put", "ask_human"],
+        "allowed_mcp_tools": ["d2_index_documents", "d2_search_documents", "d2_read_document_fragments", "d2_validate_ontology"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "ontology_result",
+        "step_limit": 55,
+        "system_prompt": "Ты проектировщик онтологии документной коллекции. Полный запрос находится в TASK CONTEXT. При первом запуске проверь workflow_approval.status=approved и gate_node_id=approve_manifest и используй ровно утверждённые project_attachments. Для каждого входа получи attachment_presign_get. Для immutable индекса заранее вызови attachment_presign_put с filename, оканчивающимся на .sqlite3, и content_type=application/vnd.sqlite3; index_documents вызывай с documents=[{source_id,filename,content_type,url},...] для всех утверждённых вложений, где url — соответствующий GET URL, а source_id — attachment_id, и передай URL индекса как upload_url. Для ontology используй отдельный attachment_presign_put с filename, оканчивающимся на .json, и content_type=application/json. После каждой успешной загрузки вызови attachment_presign_get по attachment_id и продолжай только при status=success. Проверяй sha256 и size_bytes из успешного MCP-результата index_documents или validate_ontology; metadata size_bytes от attachment_presign_get не используй как критерий, пока attachment bridge не исправлен. Вызови index_documents, затем search_documents и read_document_fragments по нескольким документам и контрольным вопросам. Создай ontology schema_version=1 с начальной строковой version='1.0.0', base_version=null, entity_types, relation_types, observation_types и coverage. Строгий контракт документа: только {schema_version,ontology_id,version,base_version,entity_types,relation_types,observation_types,coverage}; PropertyDefinition={id,label,value_type,required}; EntityType={id,label,properties:[PropertyDefinition]}; RelationType={id,label,source_type,target_type}; ObservationType={id,label,subject_type,value_type,unit_required,condition_properties:[PropertyDefinition]}; Coverage={question_id,schema_element_ids:[id,...]}. Все label пиши по-русски («Рецептура», «Концентрация компонента», «содержит компонент»), id — латиницей в snake_case. У каждого entity type объяви свойство названия {id:'<id типа>_name',label:'Название',value_type:'string',required:true}, например recipe_name: по нему отчёт подписывает узлы графа фактов. question_id — краткая формулировка контрольного вопроса по-русски, например «Какие рецептуры описаны». Для value_type допустимы только string|integer|number|boolean|string_list; required и unit_required — JSON boolean. Все id непустые и глобально уникальные, relation endpoints и observation subject_type ссылаются на entity id, coverage ссылается только на объявленные schema id; не добавляй другие поля. Вызови validate_ontology. При возврате после отклонения approve_ontology переиспользуй сохранённый index только если у него есть непустой sha256 и attachment_presign_get успешен. Если замечание человека явно говорит, что индекс недоступен или невалиден, построй один новый index. Для следующей ontology укажи новую строковую semantic version и base_version, равный строковой предыдущей version, затем повторно проверь её. Если любой MCP-вызов вернул status=error, не объявляй отсутствующий артефакт готовым и не возвращай status='ok'; остановись и верни task_report с безопасным описанием ошибки без signed URL. Evidence и типы выводи только из прочитанных fragments; не используй shell, локальные пути или Container-Use. Инструменты вызывай как функции. Не включай signed URL в ответ. Верни status='ok' только после успешных index, fragment reads, validate_ontology и GET-проверок обоих артефактов: {status:'ok',manifest:[{attachment_id,filename},...],index:{attachment_id,filename,sha256},ontology:{attachment_id,filename,ontology_id,version,base_version,sha256},coverage:[{approved_documents,indexed_documents,fragments_read,validated:true}],limitations}. Для файлов .jsonl передавай в index_documents content_type=application/jsonl, в том числе когда старые metadata содержат application/octet-stream или text/plain; application/json означает один JSON-документ и не подходит для JSONL. Signed GET и PUT URL выбирай по соответствующим backend-ссылкам, сохраняя назначение GET или PUT. Не реконструируй URL и не обновляй дату вручную. Ошибку скачивания не исправляй заменой MIME-типа. При status=error остановись и верни task_report с исходным error.code в code и безопасным error.message в message; не создавай повторно выходные вложения. При каждой validate_ontology передавай expected_base_version=ontology.base_version: null для первой версии, точную предыдущую строковую version для исправленной. В search_documents и read_document_fragments передавай expected_index_sha256=index.sha256. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      },
+      {
+        "_id": "collection_builder",
+        "name": "collection_builder",
+        "display_name": "MCP: сборщик коллекции",
+        "description": "Извлекает проверяемые факты и собирает immutable SQLite collection.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["execution"],
+        "allowed_tools": ["attachment_presign_get", "attachment_presign_put"],
+        "allowed_mcp_tools": ["d2_search_documents", "d2_read_document_fragments", "d2_read_ontology", "d2_validate_fact_batch", "d2_build_collection", "d2_inspect_collection"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "collection_result",
+        "step_limit": 100,
+        "system_prompt": "Ты собираешь документную коллекцию после утверждения онтологии. Полный запрос находится в TASK CONTEXT. Начинай только если workflow_approval.status=approved и gate_node_id=approve_ontology. Бери version, sha256 и attachment_id онтологии из workflow_approval.data.agent_result.output.ontology; не подменяй их более новой или старой ontology_result. Получи GET индекса и утверждённой ontology через attachment_presign_get. Вызови read_ontology с URL утверждённой ontology и её expected_ontology_sha256. read_ontology сам сверяет контрольную сумму файла с переданной, поэтому status='ok' уже означает совпадение с утверждённой версией. Продолжай только при status='ok' и совпадении ontology.ontology_id и ontology.version с approval. Контрольные суммы видны тебе только как ссылки $value_ref, а у одного значения в разных ответах разные id ссылок: не сравнивай id ссылок и не считай их различие несовпадением. Бери type_id, property IDs и правила relations/observations только из возвращённого ontology; не угадывай их по фрагментам. Обработай каждый source_id утверждённого manifest по очереди: вызови 2–3 раза search_documents с source_ids=[ссылка $value_ref на attachment_id документа из manifest] — по типам сущностей, связей и наблюдений ontology и по вопросам запроса. search_documents ищет совпадения слов, а не смысл, а документы бывают на английском и на русском, поэтому в каждый запрос включай термины на обоих языках, например: interfacial tension IFT surfactant concentration temperature salinity brine межфазное натяжение ПАВ концентрация температура минерализация. Затем прочитай 4–6 самых содержательных fragments через read_document_fragments и сопоставь evidence с исходным текстом. Извлеки из документа все факты, которые прямо подтверждает прочитанный текст, ориентир 5–15 фактов на документ: сущности, связи между ними и наблюдения со значением, единицей и всеми условиями, указанными в тексте. Для каждого документа заполни source_coverage с source_id, уникальными fragment_ids прочитанных фрагментов, fact_count и status='facts' или status='no_supported_facts'; во втором случае укажи непустую reason. Не выдумывай факт ради покрытия. Сформируй минимум два непустых fact batch: один fact batch на 2–3 документа. Сущность, уже объявленную в прошлом batch, не объявляй снова, а ссылайся на её id. Параметр facts для validate_fact_batch — JSON-массив, не объект и не строка. Схема каждого элемента задаётся kind: kind='entity' имеет {kind,id,type_id,properties,evidence}; kind='relation' имеет {kind,id,type_id,source_entity_id,source_type_id,target_entity_id,target_type_id,evidence}; kind='observation' имеет {kind,id,type_id,subject_entity_id,subject_type_id,value,unit,conditions,evidence}. evidence:{source_id,fragment_id,text}; source_id — ID вложения из manifest, fragment_id — точный SHA-256 ID прочитанного фрагмента, text — дословная непустая подстрока этого фрагмента. properties и conditions — объекты, unit — строка или null. В свойство <id типа>_name записывай название сущности: общеупотребительное название — по-русски (метанол, соляная кислота), собственное имя, марку, формулу или код образца — как в источнике. Остальные строковые значения properties и conditions (роли, типы, методы) тоже пиши по-русски; evidence.text не переводи. Не используй поля type, fact_type или entity_type_id вместо type_id. Для каждого batch получи отдельный PUT и вызови validate_fact_batch с одинаковыми expected index/ontology sha256; продолжай только при status='ok', сохрани точные batch sha256. После validation получи attachment_presign_get для каждого batch и вызови build_collection с fact_batches=[{url: GET URL batch, expected_sha256: точный sha256 из validate_fact_batch}, ...]; у каждой ссылки ровно эти два поля. Для collection заранее получи отдельный attachment_presign_put с filename, оканчивающимся на .sqlite3, и content_type=application/x-sqlite3; передай его URL как upload_url. Выполни inspect_collection только при вложенном data.status='ok'. При ошибке MCP остановись и верни task_report с её кодом без signed URL; не повторяй вызов, меняя наугад ключи или тип файла. Исключение: если validate_fact_batch вернул FACT_EVIDENCE_INVALID, FACT_SOURCE_INVALID или INPUT_INVALID, ничего не сохранено: исправь названный факт так, чтобы evidence.text был одним непрерывным дословным отрезком прочитанного fragment с тем же fragment_id, и вызови validate_fact_batch снова, не более двух повторов. Не используй shell, SQL-запись, локальные пути или Container-Use. Не включай signed URL в ответ. Верни один JSON-объект {status:'ok',approved_ontology:{ontology_id,version,sha256},source_coverage,fact_batches:[{attachment_id,filename,sha256,fact_count}],collection:{attachment_id,filename,sha256,counts,fingerprints},inspection,limitations}. Получи GET готовой collection. Передай в inspect_collection expected_collection_sha256=collection.sha256; inspect_collection сам сверяет эту сумму, и status='ok' означает совпадение. В collection.fingerprints скопируй index_sha256,ontology_sha256,fact_batch_sha256s,input_fingerprint из build_collection, в inspection — полный успешный ответ inspect_collection без signed URL. source_coverage — массив двух вариантов: при фактах {source_id,fragment_ids,fact_count,status:\"facts\"}, fact_count>=1 и непустые fragment_ids; поле reason не включай. При отсутствии фактов {source_id,fragment_ids,fact_count:0,status:\"no_supported_facts\",reason:\"Конкретная причина отсутствия доказательств\"}; reason не может быть null, пустой строкой или пробелами. ID всех facts глобально уникальны между batch; каждую сущность объявляй один раз, relations/observations могут ссылаться на неё из других batch. Если доказательств недостаточно для двух непустых batch, верни task_report с outcome='failed' и code='insufficient_evidence'; не дублируй сущности и не придумывай факты. В search_documents и read_document_fragments передавай expected_index_sha256=ontology_result.index.sha256. approved_ontology выбирай из утверждённого workflow_approval; backend связывает технические параметры с этой сохранённой версией. Проверенные batch и collection fingerprints передавай ссылками на исходные ответы инструментов. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      },
+      {
+        "_id": "collection_analyst",
+        "name": "collection_analyst",
+        "display_name": "MCP: аналитик коллекции",
+        "description": "Выполняет два read-only запроса к одной collection и готовит typed report payload.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["execution"],
+        "allowed_tools": ["attachment_presign_get", "attachment_presign_put"],
+        "allowed_mcp_tools": ["d2_inspect_collection", "d2_query_collection"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "analysis_result",
+        "step_limit": 45,
+        "system_prompt": "Ты аналитик утверждённой immutable SQLite collection. Полный запрос и collection_result находятся в TASK CONTEXT. Получи один GET collection через attachment_presign_get и сначала вызови inspect_collection. По фактической schema выполни два разных безопасных SELECT/CTE запроса к той же collection; один запрос должен прослеживать связь сущность или рецептура → наблюдение → conditions → source_id/fragment_id. Для сохранения каждого query result заранее получи отдельный attachment_presign_put и передай его как result_upload_url. Не выполняй INSERT, UPDATE, DELETE, ATTACH, PRAGMA или несколько SQL statements. Не перестраивай индекс, ontology или collection. Третьим запросом сохрани связи для графа фактов ровно так: SELECT r.relation_id, r.type_id, r.source_node_id, r.source_type_id, r.target_node_id, r.target_type_id, r.source_id, r.fragment_id, COALESCE(json_extract(s.properties_json, '$.' || r.source_type_id || '_name'), r.source_node_id) AS source_label, COALESCE(json_extract(t.properties_json, '$.' || r.target_type_id || '_name'), r.target_node_id) AS target_label FROM relations AS r LEFT JOIN nodes AS s ON s.node_id = r.source_node_id LEFT JOIN nodes AS t ON t.node_id = r.target_node_id ORDER BY r.relation_id — с отдельным attachment_presign_put; верни его как fact_graph={attachment_id,filename,sha256,sql,collection_sha256,row_count,truncated}. fact_graph не входит в query_results и answers. Сформируй report_data для knowledge renderer: обязательны project_id, run_id, result_id, result_version, title, metadata с question/schema_version/collection_version и answers. result_version должен быть непустой JSON-строкой; metadata.schema_version и metadata.collection_version должны быть JSON-строками. Числовую версию источника передавай строкой без изменения значения. Не формируй graph или narrative для renderer: он читает сохранённые query JSON. Не включай signed URL. Верни один JSON-объект {status:'ok',collection_sha256,answers,query_results,fact_graph,report_data}. Во все inspect_collection и query_collection передавай expected_collection_sha256=collection_result.collection.sha256 и проверяй возвращённый collection_sha256. Для каждого query_results верни {attachment_id,filename,sha256,question,sql,collection_sha256,row_count,truncated,source_refs}, где sha256 — хеш реально загруженного JSON из query_collection, row_count=len(rows); скопируй sql и source_refs без изменений. Для каждого answers верни {question,answer,source_refs}; question должен точно совпадать с соответствующим query_result. Включай source_id и fragment_id в SELECT с доказательствами и не переименовывай их: по ним отчёт связывает строки с источниками. Остальным столбцам SELECT давай русские псевдонимы в двойных кавычках, например json_extract(n.properties_json, '$.recipe_name') AS \"Рецептура\"; эти имена станут заголовками таблиц отчёта. В таблицы для человека не выводи node_id, type_id и целые properties_json/conditions_json: значения свойств и условий извлекай через json_extract в отдельные столбцы. question, answer и report_data.title пиши по-русски. report_data — envelope с project_id,run_id,result_id,result_version,title,metadata:{question,schema_version,collection_version} и answers — точной копией верхнеуровневого answers (передай ссылкой на тот же массив); не копируй таблицы или источники: renderer прочитает сохранённые query JSON. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      },
+      {
+        "_id": "report_builder",
+        "name": "report_builder",
+        "display_name": "MCP: сборщик отчёта",
+        "description": "Рендерит один typed result в согласованные форматы и manifest.",
+        "type": "generic",
+        "agent_class": "GenericAgent",
+        "model": "openai/gpt-5.6-terra",
+        "reasoning_effort": "low",
+        "enabled": true,
+        "exact_tool_values": true,
+        "allowed_phases": ["output"],
+        "allowed_tools": ["attachment_presign_get", "attachment_presign_put"],
+        "allowed_mcp_tools": ["r_render_report"],
+        "allowed_delegation_targets": [],
+        "output_save_key": "report_result",
+        "step_limit": 35,
+        "system_prompt": "Ты создаёшь файлы из сохранённых проверенных артефактов. Полный запрос находится в TASK CONTEXT. Если присутствует analysis_result.report_data, используй knowledge 1.3.0 и ровно TXT, JSON, HTML, PDF, DOCX, XLSX. Получи attachment_presign_get для каждого analysis_result.query_results, для analysis_result.fact_graph и для утверждённой ontology_result.ontology. Передай source_artifacts=[{url:GET URL,expected_sha256:query_result.sha256} для каждого query_result, {url:GET fact_graph,expected_sha256:analysis_result.fact_graph.sha256,role:'fact_graph'}, {url:GET ontology,expected_sha256:collection_result.inspection.input_checksums.ontology_sha256,role:'ontology'}] и expected_collection_sha256=collection_result.collection.sha256. Checksum ontology бери из inspection коллекции: так renderer проверяет, что схема относится к этой коллекции. Если присутствует web_research_result.report_data, используй news 1.2.0 и brief.formats: JSON, HTML, CSV, PDF. Получи GET web_research_result.final_result и передай source_artifacts=[{url:GET URL,expected_sha256:final_result.sha256}]. Не смешивай семьи: при отсутствии или одновременном наличии обоих входов верни task_report с outcome='failed'. report_data копируй как envelope идентичности отчёта; renderer сам строит factual tables, sources, metadata и answer из JSON-артефактов. Не пересказывай и не перепечатывай их содержимое. Для каждого файла и export-manifest.json получи отдельный attachment_presign_put с корректным content_type, затем один раз вызови render_report как функцию. Готовым считай только status=ready для каждого требуемого формата. При любой ошибке верни task_report с outcome='failed'. Верни {status:'ok',template,manifest_attachment_id,formats,result_sha256,collection_sha256,source_artifacts,ontology_sha256,fact_graph_sha256,limitations}; для news ontology_sha256 и fact_graph_sha256 не возвращай. Скопируй template, source_artifacts, collection_sha256, ontology_sha256 и fact_graph_sha256 из renderer; result_sha256=result.sha256. Для каждого formats добавь attachment_id из соответствующего PUT и сохрани status,filename,sha256,size_bytes из renderer. Не печатай signed URL. Не используй shell, файловые пути или Container-Use. report_data.result_version — непустая JSON-строка. source_artifacts строятся только из GET сохранённых JSON-артефактов и соответствующих sha256; references выбирают исходные значения. В итоговом JSON передай source_artifacts как ссылку на полный массив, возвращённый renderer; не заменяй его сведениями из памяти. Неизменяемые значения выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"} в существующих полях аргументов инструментов и технических полях итогового JSON. Backend подставляет исходное JSON-значение до проверки схемы и сохранения; сохраняет тип, null, пустые массивы и объекты. Не придумывай id ссылок и не вставляй ссылки внутрь строк. Для URL, SHA-256, receipt, ID артефактов и целых сохранённых объектов используй подходящую ссылку из текущего tenant/project/run. Не перепечатывай и не реконструируй эти значения. Signed GET URL предназначен для чтения, PUT URL — только для загрузки; передавай ссылки на них в поля инструментов, но не раскрывай URL, credentials или заголовки в тексте для пользователя. При истечении URL остановись с безопасной ошибкой; автоматическое продление не предусмотрено. Решения, факты и цитаты формируй только по прочитанным доказательствам: ссылка не заменяет проверку содержания. Язык результата: всё, что прочитает человек, пиши по-русски — названия, подписи (label), описания, вопросы, ответы, причины, замечания, выводы, ограничения и заголовки. Английский термин заменяй принятым русским (межфазное натяжение, метанол, пилотное внедрение); если принятого перевода нет, дай русское описание и оригинал в скобках. Не переводи дословные цитаты, собственные имена компаний, продуктов и приборов, химические формулы, единицы измерения и общепринятые аббревиатуры. Идентификаторы, имена файлов, ключи JSON, значения перечислений, SQL и имена инструментов остаются латиницей по контракту, но в тексте для человека не называй их — пиши смысл по-русски (не «evidence_level=operational», а «уровень доказательности: промышленная эксплуатация»). Результат инструмента с rejected_before_dispatch=true — не ошибка MCP: инструмент не вызывался. Исправь аргументы по error.path и error.message (выбери подходящую {\"$value_ref\"} или объект нужной формы) и повтори вызов; правило остановки при status=error к такому результату не относится. Провал задачи сообщай только объектом {task_report:{outcome:'failed',code,message}}, где code — код ошибки, а message — безопасная причина без signed URL. Поле status о провале не сообщает: ответ без task_report платформа считает выполненным и сохраняет как результат этапа."
+      }
+    ],
+    "workflows": [
+      {
+        "_id": "knowledge_collection_mcp",
+        "name": "knowledge_collection_mcp",
+        "display_name": "MCP: коллекция знаний по документам",
+        "description": "Утверждённый manifest → ontology approval → validated facts → immutable collection → два cited query → knowledge exports.",
+        "execution_mode": "static",
+        "max_iterations": 40,
+        "run_timeout_seconds": 14400,
+        "is_default": false,
+        "prompts": [
+          {
+            "name": "Коллекция знаний по вложениям",
+            "text": "Построй по приложенным документам онтологию и коллекцию знаний, ответь на два вопроса с точными источниками и подготовь TXT, JSON, HTML, PDF, DOCX и XLSX. Один ответ должен показать связь рецептура → наблюдение → условия → источник."
+          }
+        ],
+        "nodes": [
+          {"id": "start", "type": "start"},
+          {
+            "id": "approve_manifest",
+            "type": "approval_gate",
+            "label": "Утвердить запрос и состав документов",
+            "show_keys": ["user_prompt", "project_attachments"]
+          },
+          {
+            "id": "design_ontology",
+            "type": "phase",
+            "phase_label": "planning",
+            "label": "Индекс и проект онтологии",
+            "task_type": "knowledge_design_ontology",
+            "description": "По утверждённым вложениям построить immutable индекс, прочитать репрезентативные fragments и сохранить validated ontology version. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "ontology_designer",
+            "reads": ["user_prompt", "project_attachments", "workflow_approval", "ontology_result", "conversation_history"],
+            "writes": ["ontology_result"],
+            "max_retries": 1,
+            "max_tool_failures": 3
+          },
+          {
+            "id": "ontology_ready",
+            "type": "validator",
+            "max_reject_retries": 2,
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "ontology_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "manifest", "index", "ontology", "coverage"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "manifest": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": ["attachment_id", "filename"],
+                        "properties": {"attachment_id": {"type": "string", "minLength": 1}, "filename": {"type": "string", "minLength": 1}},
+                        "additionalProperties": false
+                      }
+                    },
+                    "index": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "sha256"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.sqlite3$"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                      }
+                    },
+                    "ontology": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "ontology_id", "version", "base_version", "sha256"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.json$"},
+                        "ontology_id": {"type": "string", "minLength": 1},
+                        "version": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})$"},
+                        "base_version": {"type": ["string", "null"], "pattern": "^(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})$"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                      }
+                    },
+                    "coverage": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": ["approved_documents", "indexed_documents", "fragments_read", "validated"],
+                        "properties": {
+                          "approved_documents": {"type": "integer", "minimum": 1},
+                          "indexed_documents": {"type": "integer", "minimum": 1},
+                          "fragments_read": {"type": "integer", "minimum": 1},
+                          "validated": {"const": true}
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "refine_checks": [
+              {"kind": "value_relation", "key": "ontology_result.ontology.base_version", "other_key": "refine_previous.ontology.version", "operator": "equals"},
+              {
+                "kind": "value_relation",
+                "key": "ontology_result.ontology.version",
+                "other_key": "refine_previous.ontology.version",
+                "operator": "semantic_version_greater"
+              }
+            ]
+          },
+          {"id": "approve_ontology", "type": "approval_gate", "label": "Утвердить версию онтологии", "show_keys": ["ontology_result"]},
+          {
+            "id": "build_collection",
+            "type": "phase",
+            "phase_label": "execution",
+            "label": "Проверяемые факты и коллекция",
+            "task_type": "knowledge_build_collection",
+            "description": "Обработать весь manifest по утверждённой ontology: по каждому документу 2–3 раза search_documents и 4–6 самых содержательных fragments, ориентир 5–15 фактов на документ со связями и наблюдениями; один fact batch на 2–3 документа, не менее двух validated fact batch; собрать одну immutable collection. Технические поля approved_ontology должны совпадать с утверждённой версией workflow_approval; используй ссылки на сохранённые значения. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "collection_builder",
+            "reads": ["user_prompt", "ontology_result", "workflow_approval", "conversation_history"],
+            "writes": ["collection_result"],
+            "max_retries": 1,
+            "max_tool_failures": 6
+          },
+          {
+            "id": "collection_ready",
+            "type": "validator",
+            "max_reject_retries": 2,
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "collection_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "approved_ontology", "source_coverage", "fact_batches", "collection", "inspection"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "source_coverage": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": ["source_id", "fragment_ids", "fact_count", "status"],
+                        "properties": {
+                          "source_id": {"type": "string", "minLength": 1},
+                          "fragment_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                          "fact_count": {"type": "integer", "minimum": 0},
+                          "status": {"enum": ["facts", "no_supported_facts"]},
+                          "reason": {"type": "string", "minLength": 1, "pattern": "\\S"}
+                        },
+                        "allOf": [
+                          {"if": {"properties": {"status": {"const": "facts"}}}, "then": {"properties": {"fact_count": {"minimum": 1}, "fragment_ids": {"minItems": 1}}}},
+                          {"if": {"properties": {"status": {"const": "no_supported_facts"}}}, "then": {"required": ["reason"], "properties": {"fact_count": {"const": 0}}}}
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "fact_batches": {
+                      "type": "array",
+                      "minItems": 2,
+                      "items": {
+                        "type": "object",
+                        "required": ["attachment_id", "filename", "sha256", "fact_count"],
+                        "properties": {
+                          "attachment_id": {"type": "string", "minLength": 1},
+                          "filename": {"type": "string", "minLength": 1},
+                          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                          "fact_count": {"type": "integer", "minimum": 1}
+                        }
+                      }
+                    },
+                    "collection": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "sha256", "counts", "fingerprints"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.sqlite3$"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "counts": {
+                          "type": "object",
+                          "required": ["nodes", "relations", "observations", "fragments", "source_status"],
+                          "properties": {
+                            "nodes": {"type": "integer", "minimum": 0},
+                            "relations": {"type": "integer", "minimum": 0},
+                            "observations": {"type": "integer", "minimum": 0},
+                            "fragments": {"type": "integer", "minimum": 0},
+                            "source_status": {"type": "integer", "minimum": 0}
+                          }
+                        },
+                        "fingerprints": {
+                          "type": "object",
+                          "required": ["index_sha256", "ontology_sha256", "fact_batch_sha256s", "input_fingerprint"],
+                          "properties": {
+                            "index_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                            "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                            "fact_batch_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                            "input_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        }
+                      }
+                    },
+                    "approved_ontology": {
+                      "type": "object",
+                      "required": ["ontology_id", "version", "sha256"],
+                      "properties": {
+                        "ontology_id": {"type": "string", "minLength": 1},
+                        "version": {"type": "string", "minLength": 1},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                      }
+                    },
+                    "inspection": {
+                      "type": "object",
+                      "required": ["status", "schema_version", "ontology_id", "ontology_version", "collection_sha256", "counts", "input_checksums", "tables"],
+                      "properties": {
+                        "status": {"const": "ok"},
+                        "schema_version": {"const": 1},
+                        "ontology_id": {"type": "string", "minLength": 1},
+                        "ontology_version": {"type": "string", "minLength": 1},
+                        "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "counts": {
+                          "type": "object",
+                          "required": ["nodes", "relations", "observations", "fragments", "source_status"],
+                          "properties": {
+                            "nodes": {"type": "integer", "minimum": 0},
+                            "relations": {"type": "integer", "minimum": 0},
+                            "observations": {"type": "integer", "minimum": 0},
+                            "fragments": {"type": "integer", "minimum": 0},
+                            "source_status": {"type": "integer", "minimum": 0}
+                          }
+                        },
+                        "input_checksums": {
+                          "type": "object",
+                          "required": ["index_sha256", "ontology_sha256", "fact_batch_sha256s", "input_fingerprint"],
+                          "properties": {
+                            "index_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                            "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                            "fact_batch_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                            "input_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "tables": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "required": ["name", "columns"],
+                            "properties": {"name": {"type": "string", "minLength": 1}, "columns": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "collection_result.source_coverage",
+                "id_field": "source_id",
+                "other_key": "ontology_result.manifest",
+                "other_id_field": "attachment_id"
+              },
+              {
+                "kind": "json_schema",
+                "key": "workflow_approval",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "gate_node_id"],
+                  "properties": {"status": {"const": "approved"}, "gate_node_id": {"const": "approve_ontology"}}
+                }
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.approved_ontology.ontology_id",
+                "other_key": "workflow_approval.data.agent_result.output.ontology.ontology_id",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.approved_ontology.version",
+                "other_key": "workflow_approval.data.agent_result.output.ontology.version",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.approved_ontology.sha256",
+                "other_key": "workflow_approval.data.agent_result.output.ontology.sha256",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.collection.sha256",
+                "other_key": "collection_result.inspection.collection_sha256",
+                "operator": "equals"
+              },
+              {"kind": "value_relation", "key": "collection_result.collection.counts", "other_key": "collection_result.inspection.counts", "operator": "equals"},
+              {
+                "kind": "value_relation",
+                "key": "collection_result.collection.fingerprints",
+                "other_key": "collection_result.inspection.input_checksums",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.collection.fingerprints.ontology_sha256",
+                "other_key": "collection_result.approved_ontology.sha256",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.collection.fingerprints.index_sha256",
+                "other_key": "ontology_result.index.sha256",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.inspection.ontology_id",
+                "other_key": "collection_result.approved_ontology.ontology_id",
+                "operator": "equals"
+              },
+              {
+                "kind": "value_relation",
+                "key": "collection_result.inspection.ontology_version",
+                "other_key": "collection_result.approved_ontology.version",
+                "operator": "equals"
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "collection_result.fact_batches",
+                "id_field": "attachment_id",
+                "other_key": "collection_result.fact_batches",
+                "other_id_field": "attachment_id"
+              }
+            ]
+          },
+          {
+            "id": "analyze_collection",
+            "type": "phase",
+            "phase_label": "execution",
+            "label": "Ответы на вопросы по коллекции",
+            "task_type": "knowledge_analyze_collection",
+            "description": "Выполнить два read-only запроса к одной collection с citations, сохранить третий запрос связей для графа фактов и подготовить typed knowledge report payload с точной копией answers. report_data.result_version, metadata.schema_version и metadata.collection_version — непустые JSON-строки. Результаты query сохраняй как JSON-артефакты; report_data содержит envelope и точную копию answers; факты renderer получает через source_artifacts. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "collection_analyst",
+            "reads": ["user_prompt", "ontology_result", "collection_result"],
+            "writes": ["analysis_result"],
+            "max_retries": 1,
+            "max_tool_failures": 3
+          },
+          {
+            "id": "analysis_ready",
+            "type": "validator",
+            "max_reject_retries": 2,
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "analysis_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "collection_sha256", "answers", "query_results", "fact_graph", "report_data"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "answers": {
+                      "type": "array",
+                      "minItems": 2,
+                      "items": {
+                        "type": "object",
+                        "required": ["question", "answer", "source_refs"],
+                        "properties": {
+                          "question": {"type": "string", "minLength": 1},
+                          "answer": {"type": "string", "minLength": 1},
+                          "source_refs": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "object",
+                              "required": ["source_id", "fragment_id"],
+                              "properties": {"source_id": {"type": "string", "minLength": 1}, "fragment_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "query_results": {
+                      "type": "array",
+                      "minItems": 2,
+                      "items": {
+                        "type": "object",
+                        "required": ["attachment_id", "filename", "sha256", "question", "sql", "collection_sha256", "row_count", "truncated", "source_refs"],
+                        "properties": {
+                          "attachment_id": {"type": "string", "minLength": 1},
+                          "filename": {"type": "string", "pattern": "\\.json$"},
+                          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                          "question": {"type": "string", "minLength": 1},
+                          "sql": {"type": "string", "minLength": 1},
+                          "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                          "row_count": {"type": "integer", "minimum": 0},
+                          "truncated": {"type": "boolean"},
+                          "source_refs": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "object",
+                              "required": ["source_id", "fragment_id"],
+                              "properties": {"source_id": {"type": "string", "minLength": 1}, "fragment_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+                            }
+                          }
+                        },
+                        "allOf": [{"if": {"properties": {"row_count": {"minimum": 1}}}, "then": {"properties": {"source_refs": {"minItems": 1}}}}]
+                      }
+                    },
+                    "report_data": {
+                      "type": "object",
+                      "required": ["project_id", "run_id", "result_id", "result_version", "title", "metadata", "answers"],
+                      "properties": {
+                        "project_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+                        "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+                        "result_id": {"type": "string", "minLength": 1},
+                        "result_version": {"type": "string", "minLength": 1},
+                        "title": {"type": "string", "minLength": 1},
+                        "answer": {"type": "string"},
+                        "tables": {"type": "array"},
+                        "sources": {"type": "array"},
+                        "limitations": {"type": "array"},
+                        "metadata": {
+                          "type": "object",
+                          "required": ["question", "schema_version", "collection_version"],
+                          "properties": {"question": {"type": "string"}, "schema_version": {"type": "string"}, "collection_version": {"type": "string"}}
+                        },
+                        "graph": {"type": "object"},
+                        "answers": {"type": "array", "minItems": 1}
+                      }
+                    },
+                    "fact_graph": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "sha256", "sql", "collection_sha256", "row_count", "truncated"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.json$"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "sql": {"type": "string", "minLength": 1},
+                        "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "row_count": {"type": "integer", "minimum": 0},
+                        "truncated": {"type": "boolean"}
+                      }
+                    },
+                    "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                  }
+                }
+              },
+              {"kind": "value_relation", "key": "analysis_result.collection_sha256", "other_key": "collection_result.collection.sha256", "operator": "equals"},
+              {"kind": "value_relation", "key": "analysis_result.fact_graph.collection_sha256", "other_key": "analysis_result.collection_sha256", "operator": "equals"},
+              {
+                "kind": "id_set_equals",
+                "key": "analysis_result.report_data.answers",
+                "id_field": "question",
+                "other_key": "analysis_result.answers",
+                "other_id_field": "question",
+                "fields": ["answer", "source_refs"]
+              },
+              {
+                "kind": "value_relation",
+                "key": "analysis_result.query_results",
+                "other_key": "analysis_result.collection_sha256",
+                "operator": "all_equal",
+                "field": "collection_sha256"
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "analysis_result.answers",
+                "id_field": "question",
+                "other_key": "analysis_result.query_results",
+                "other_id_field": "question",
+                "fields": ["source_refs"]
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "analysis_result.query_results",
+                "id_field": "attachment_id",
+                "other_key": "analysis_result.query_results",
+                "other_id_field": "attachment_id"
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "analysis_result.query_results",
+                "id_field": "sql",
+                "other_key": "analysis_result.query_results",
+                "other_id_field": "sql"
+              },
+              {
+                "kind": "id_set_equals",
+                "key": "analysis_result.query_results",
+                "id_field": "sha256",
+                "other_key": "analysis_result.query_results",
+                "other_id_field": "sha256"
+              }
+            ]
+          },
+          {
+            "id": "render_report",
+            "type": "phase",
+            "phase_label": "output",
+            "label": "Файлы результата",
+            "task_type": "knowledge_render_report",
+            "description": "Получить GET сохранённых query_results, отрендерить их вместе с утверждённой ontology (role=ontology) и запросом связей (role=fact_graph) через source_artifacts шаблоном knowledge 1.3.0 и сохранить шесть реально готовых форматов. report_data.result_version — непустая JSON-строка. Факты renderer читает только из сохранённых source_artifacts; результат source_artifacts передай ссылкой на полный массив renderer. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "report_builder",
+            "reads": ["user_prompt", "ontology_result", "collection_result", "analysis_result"],
+            "writes": ["report_result"],
+            "max_retries": 1,
+            "max_tool_failures": 3
+          },
+          {
+            "id": "report_ready",
+            "type": "validator",
+            "max_reject_retries": 2,
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "report_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "template", "manifest_attachment_id", "formats", "result_sha256", "collection_sha256", "source_artifacts", "ontology_sha256", "fact_graph_sha256"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "template": {"type": "object", "required": ["id", "version"], "properties": {"id": {"const": "knowledge"}, "version": {"const": "1.3.0"}}},
+                    "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "fact_graph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "manifest_attachment_id": {"type": "string", "minLength": 1},
+                    "formats": {
+                      "type": "object",
+                      "required": ["txt", "json", "html", "pdf", "docx", "xlsx"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "txt": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "json": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "html": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "pdf": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "docx": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        },
+                        "xlsx": {
+                          "type": "object",
+                          "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                          "properties": {
+                            "status": {"const": "ready"},
+                            "attachment_id": {"type": "string", "minLength": 1},
+                            "filename": {"type": "string", "minLength": 1},
+                            "size_bytes": {"type": "integer", "minimum": 1},
+                            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                          }
+                        }
+                      }
+                    },
+                    "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "source_artifacts": {
+                      "type": "array",
+                      "minItems": 2,
+                      "items": {"type": "object", "required": ["sha256"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+                    }
+                  }
+                }
+              },
+              {"kind": "value_relation", "key": "report_result.collection_sha256", "other_key": "collection_result.collection.sha256", "operator": "equals"},
+              {"kind": "value_relation", "key": "report_result.ontology_sha256", "other_key": "collection_result.inspection.input_checksums.ontology_sha256", "operator": "equals"},
+              {"kind": "value_relation", "key": "report_result.fact_graph_sha256", "other_key": "analysis_result.fact_graph.sha256", "operator": "equals"},
+              {
+                "kind": "id_set_equals",
+                "key": "report_result.source_artifacts",
+                "id_field": "sha256",
+                "other_key": "analysis_result.query_results",
+                "other_id_field": "sha256"
+              }
+            ]
+          },
+          {"id": "publish_report", "type": "deploy", "label": "Публикация HTML-отчёта", "phase_label": "deployment", "html_from": "report_result.formats.html.attachment_id"},
+          {"id": "end", "type": "end"}
+        ],
+        "edges": [
+          {"from": "start", "to": "approve_manifest"},
+          {"from": "approve_manifest", "to": "design_ontology", "condition": "approved"},
+          {"from": "approve_manifest", "to": "end", "condition": "rejected"},
+          {"from": "design_ontology", "to": "ontology_ready"},
+          {"from": "ontology_ready", "to": "approve_ontology", "condition": "approved"},
+          {"from": "ontology_ready", "to": "design_ontology", "condition": "rejected"},
+          {"from": "approve_ontology", "to": "build_collection", "condition": "approved"},
+          {"from": "approve_ontology", "to": "design_ontology", "condition": "rejected"},
+          {"from": "build_collection", "to": "collection_ready"},
+          {"from": "collection_ready", "to": "analyze_collection", "condition": "approved"},
+          {"from": "collection_ready", "to": "build_collection", "condition": "rejected"},
+          {"from": "analyze_collection", "to": "analysis_ready"},
+          {"from": "analysis_ready", "to": "render_report", "condition": "approved"},
+          {"from": "analysis_ready", "to": "analyze_collection", "condition": "rejected"},
+          {"from": "render_report", "to": "report_ready"},
+          {"from": "report_ready", "to": "publish_report", "condition": "approved"},
+          {"from": "publish_report", "to": "end"},
+          {"from": "report_ready", "to": "render_report", "condition": "rejected"}
+        ]
+      },
+      {
+        "_id": "news_research_mcp",
+        "name": "news_research_mcp",
+        "display_name": "MCP: исследование новостей",
+        "description": "Утверждённый brief → live web snapshot → review → одна коррекция → canonical result → news exports.",
+        "execution_mode": "static",
+        "max_iterations": 40,
+        "run_timeout_seconds": 14400,
+        "is_default": false,
+        "prompts": [
+          {
+            "name": "Проверяемое исследование новостей",
+            "text": "Исследуй новости по теме применения технологий повышения нефтеотдачи за указанный период. Перед поиском подготовь brief с query, topic, start_date, end_date, include_domains, exclude_domains и formats. После согласования используй live web, один immutable snapshot, независимый review и подготовь JSON, HTML, CSV и PDF."
+          }
+        ],
+        "nodes": [
+          {"id": "start", "type": "start"},
+          {
+            "id": "prepare_brief",
+            "type": "phase",
+            "phase_label": "requirements",
+            "label": "Постановка исследования",
+            "task_type": "news_prepare_brief",
+            "description": "task_type=news_prepare_brief. Сформируй один JSON-объект {status:'ok',brief:{query,topic,start_date,end_date,include_domains,exclude_domains,formats},limitations}. Не выполняй поиск. topic должен быть general или news, даты — YYYY-MM-DD либо null, domains — массивы доменов, formats — ровно [json,html,csv,pdf]. query должен быть непустой строкой до 400 символов, без начальных/конечных пробелов и управляющих ASCII-символов. query — это поисковый запрос для веб-поиска: 3–10 ключевых слов темы на языке нужных источников (например 'цифровые двойники нефтегазовых месторождений управление активами'), без инструкций, периода, требований к языку или типам источников; период задавай только в start_date/end_date, ограничения — в limitations. Текст limitations пиши по-русски: пользователь читает его в карточке согласования.",
+            "agent_selection": "direct",
+            "agent_type": "requirements_finalizer",
+            "reads": ["user_prompt", "conversation_history"],
+            "writes": ["news_brief"],
+            "max_retries": 1
+          },
+          {
+            "id": "brief_ready",
+            "type": "validator",
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "news_brief",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "brief", "limitations"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "brief": {
+                      "type": "object",
+                      "required": ["query", "topic", "start_date", "end_date", "include_domains", "exclude_domains", "formats"],
+                      "properties": {
+                        "query": {"type": "string", "minLength": 1, "maxLength": 400, "pattern": "^[^\\s\\x00-\\x1f\\x7f](?:[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f])?(?![\\s\\S])"},
+                        "topic": {"enum": ["general", "news"]},
+                        "start_date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"},
+                        "end_date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"},
+                        "include_domains": {
+                          "type": "array",
+                          "maxItems": 20,
+                          "uniqueItems": true,
+                          "items": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+(?![\\s\\S])"}
+                        },
+                        "exclude_domains": {
+                          "type": "array",
+                          "maxItems": 20,
+                          "uniqueItems": true,
+                          "items": {"type": "string", "minLength": 1, "maxLength": 253, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+(?![\\s\\S])"}
+                        },
+                        "formats": {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["json", "html", "csv", "pdf"]}}
+                      },
+                      "additionalProperties": false
+                    },
+                    "limitations": {"type": "array"}
+                  }
+                }
+              },
+              {"kind": "value_relation", "key": "news_brief.brief.start_date", "other_key": "news_brief.brief.end_date", "operator": "date_not_after"},
+              {
+                "kind": "value_relation",
+                "key": "news_brief.brief.include_domains",
+                "other_key": "news_brief.brief.exclude_domains",
+                "operator": "casefold_disjoint"
+              }
+            ]
+          },
+          {"id": "approve_brief", "type": "approval_gate", "label": "Утвердить постановку исследования", "show_keys": ["news_brief"]},
+          {
+            "id": "research_snapshot",
+            "type": "phase",
+            "phase_label": "execution",
+            "label": "Поиск в интернете и неизменяемый снимок источников",
+            "task_type": "news_research_snapshot",
+            "description": "task_type=news_research_snapshot. Используй только brief из approved workflow_approval. Выполни search_web с max_results=20 и сохрани одним extract_web_pages каждый результат, который может относиться к теме brief, — до 20 источников; до сохранения отбрасывай только явно посторонние. Прочитай evidence через read_web_fragments и подготовь решения: include или exclude — после чтения, с причиной. Не вызывай finalize_news_result. Верни {status:'ok',brief,snapshot:{attachment_id,filename,sha256,bundle_receipt,request_id,source_ids},decisions:{publications,events},limitations}. Для каждого выбранного результата Search передай в extract_web_pages.search_evidence backend-ссылку на целый search_evidence: request_id,source_id,url,published_date,search_receipt сохраняются без изменений, соответствующие urls подставляет backend. После Extract обязательно получи attachment_presign_get для snapshot attachment_id и передай только GET URL в read_web_fragments; PUT URL не пригоден для чтения. Если source_ids пуст, не вызывай read_web_fragments: сохрани publications=[], events=[], findings=[], date_assessments=[] и явное ограничение об отсутствии источников. Пустой результат поиска сохраняй через extract_web_pages с urls=[], search_evidence=[]; он создаёт подписанный пустой snapshot. Во всех extract_web_pages передавай query=brief.query без изменений, включая urls=[]; query связывает snapshot с утверждённым brief. В search_web передавай query,topic,start_date,end_date,include_domains,exclude_domains из того же brief. Формат publications/events строго соответствует NewsDecisions финализатора; каждое событие содержит все поля, включая evidence и merge_reason. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "web_researcher",
+            "reads": ["user_prompt", "news_brief", "workflow_approval", "conversation_history"],
+            "writes": ["web_research_result"],
+            "max_retries": 1
+          },
+          {
+            "id": "research_ready",
+            "type": "validator",
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "web_research_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "brief", "snapshot", "decisions", "limitations"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "brief": {"type": "object"},
+                    "snapshot": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "sha256", "bundle_receipt", "request_id", "source_ids"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.json(?![\\s\\S])"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"},
+                        "bundle_receipt": {"type": "string", "minLength": 1},
+                        "request_id": {"type": "string", "minLength": 1},
+                        "source_ids": {"type": "array", "minItems": 0, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+                      }
+                    },
+                    "decisions": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "publications": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                              "decision": {"enum": ["include", "exclude", "uncertain"], "type": "string"},
+                              "reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "categories": {
+                                "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "evidence": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                                  },
+                                  "required": ["quote"],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "type": "array"
+                              },
+                              "limitations": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              }
+                            },
+                            "required": ["source_id", "decision", "reason", "categories", "evidence", "limitations"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        },
+                        "events": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "event_id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "description": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "technology": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "task": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "object": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "time": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "evidence_level": {"enum": ["statement", "laboratory", "field", "operational", "not_established"], "type": "string"},
+                              "companies": {"items": {"additionalProperties": false, "properties": {"name": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}, "role": {"enum": ["developer", "adopter", "partner"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["name", "role", "source_id", "quote"], "type": "object"}, "maxItems": 20, "type": "array"},
+                              "adoption": {"anyOf": [{"additionalProperties": false, "properties": {"stage": {"enum": ["announced", "pilot", "deployed"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["stage", "source_id", "quote"], "type": "object"}, {"type": "null"}]},
+                              "categories": {
+                                "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "limitations": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "source_ids": {
+                                "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "evidence": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                    "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                                  },
+                                  "required": ["source_id", "quote"],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "merge_reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                            },
+                            "required": ["event_id", "description", "technology", "task", "object", "time", "evidence_level", "categories", "limitations", "source_ids", "evidence", "merge_reason"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["publications", "events"],
+                      "type": "object"
+                    },
+                    "limitations": {"type": "array"}
+                  },
+                  "allOf": [
+                    {
+                      "if": {"properties": {"snapshot": {"properties": {"source_ids": {"maxItems": 0}}}}},
+                      "then": {"properties": {"decisions": {"properties": {"publications": {"maxItems": 0}, "events": {"maxItems": 0}}}}}
+                    }
+                  ]
+                }
+              },
+              {"kind": "value_relation", "key": "web_research_result.brief", "other_key": "news_brief.brief", "operator": "equals"}
+            ]
+          },
+          {
+            "id": "review_snapshot",
+            "type": "phase",
+            "phase_label": "qa",
+            "label": "Независимая проверка снимка источников",
+            "task_type": "news_review_snapshot",
+            "description": "task_type=news_review_snapshot. Проверь решения только по сохранённому snapshot. Не запускай новый поиск и не меняй snapshot. Верни {status:'ok',snapshot_sha256,findings:[{id,source_ids,event_ids,issue,action}],limitations}. Верни также date_assessments:[{source_id,assessment:'accepted'|'rejected',reason}] для каждого включённого источника с Search-only датой. Обе даты читай из snapshot; Search metadata менее надёжна, чем дата страницы. При конфликте дат предложи исключить источник. Если Search-only источников нет, верни date_assessments: []. Если source_ids пуст, не вызывай инструменты: используй существующий snapshot, верни findings=[], date_assessments=[], reviewed_events=[] и явное ограничение об отсутствии источников. Верни reviewed_events как точную копию web_research_result.decisions.events до исправлений; ссылки findings.event_ids относятся к этой версии. reviewed_events — исходный web_research_result.decisions.events; backend связывает его с сохранённой версией и сохраняет её неизменной. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "web_reviewer",
+            "reads": ["news_brief", "workflow_approval", "web_research_result"],
+            "writes": ["web_review"],
+            "max_retries": 1
+          },
+          {
+            "id": "review_ready",
+            "type": "validator",
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "web_review",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "snapshot_sha256", "findings", "limitations", "date_assessments", "reviewed_events"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"},
+                    "findings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "source_ids": {
+                            "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "event_ids": {
+                            "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "issue": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "action": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                        },
+                        "required": ["id", "source_ids", "event_ids", "issue", "action"],
+                        "type": "object"
+                      }
+                    },
+                    "limitations": {"type": "array"},
+                    "date_assessments": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "required": ["source_id", "assessment", "reason"],
+                        "additionalProperties": false,
+                        "properties": {
+                          "source_id": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"},
+                          "assessment": {"enum": ["accepted", "rejected"], "type": "string"},
+                          "reason": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                        }
+                      }
+                    },
+                    "reviewed_events": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "event_id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "description": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "technology": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "task": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "object": {
+                            "anyOf": [
+                              {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              {"type": "null"}
+                            ]
+                          },
+                          "time": {
+                            "anyOf": [
+                              {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              {"type": "null"}
+                            ]
+                          },
+                          "evidence_level": {"enum": ["statement", "laboratory", "field", "operational", "not_established"], "type": "string"},
+                          "companies": {"items": {"additionalProperties": false, "properties": {"name": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}, "role": {"enum": ["developer", "adopter", "partner"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["name", "role", "source_id", "quote"], "type": "object"}, "maxItems": 20, "type": "array"},
+                          "adoption": {"anyOf": [{"additionalProperties": false, "properties": {"stage": {"enum": ["announced", "pilot", "deployed"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["stage", "source_id", "quote"], "type": "object"}, {"type": "null"}]},
+                          "categories": {
+                            "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "limitations": {
+                            "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "source_ids": {
+                            "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                            "maxItems": 20,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "evidence": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                              },
+                              "required": ["source_id", "quote"],
+                              "type": "object"
+                            },
+                            "maxItems": 20,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "merge_reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                        },
+                        "required": ["event_id", "description", "technology", "task", "object", "time", "evidence_level", "categories", "limitations", "source_ids", "evidence", "merge_reason"],
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              },
+              {"kind": "value_relation", "key": "web_review.snapshot_sha256", "other_key": "web_research_result.snapshot.sha256", "operator": "equals"},
+              {"kind": "value_relation", "key": "web_review.findings", "other_key": "web_review.findings", "operator": "same_item_ids"},
+              {"kind": "value_relation", "key": "web_review.reviewed_events", "other_key": "web_research_result.decisions.events", "operator": "equals"}
+            ]
+          },
+          {
+            "id": "finalize_news",
+            "type": "phase",
+            "phase_label": "execution",
+            "label": "Исправление по рецензии и итоговый результат",
+            "task_type": "news_finalize_result",
+            "description": "task_type=news_finalize_result. Исправь решения не более одного раза по reviewer findings. Не вызывай search_web или extract_web_pages; используй тот же snapshot. Обязательно получи attachment_presign_get snapshot, даже если source_ids=[] или повторное чтение не нужно; GET нужен finalize_news_result. При необходимости дочитай его через read_web_fragments. Получи PUT для news-result.json и вызови finalize_news_result. При NEWS_EVIDENCE_INVALID, NEWS_SCHEMA_INVALID или INPUT_INVALID ничего не сохранено: исправь названное по тексту read_web_fragments и повтори, не более двух повторов. Сформируй envelope идентичности report_data. Верни {status:'ok',brief,snapshot,decisions,reviewer_findings,critique,final_result:{attachment_id,filename,sha256,publication_count,event_count,request_id},report_data,limitations}. critique.date_assessments AppFactory заполняет сам из web_review.date_assessments. Не меняй решение reviewer и не подменяй дату Extract датой Search. Search-only источник допустим только с accepted assessment; конфликт дат исключает источник.  critique.reviewed_events AppFactory заполняет сам из web_review.reviewed_events; в critique.notes сохраняй ссылки замечаний на удалённые или объединённые события. Для удалённого события допустимы только resolution=resolved и correction_cycle=1. report_data содержит только project_id,run_id,result_id,result_version,title; factual tables, sources, metadata и answer построит renderer из canonical news-result.json. brief, critique.date_assessments и critique.reviewed_events в finalize_news_result не передавай: AppFactory подставит утверждённый brief и блоки сохранённой рецензии сам, а выдуманная ссылка отклонит вызов. report_data.result_version — непустая JSON-строка, например \"1\". После успешного finalize_news_result исправляй только report_data envelope без повторного вызова финализатора. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "web_researcher",
+            "reads": ["user_prompt", "news_brief", "workflow_approval", "web_research_result", "web_review"],
+            "writes": ["web_research_result"],
+            "max_retries": 0
+          },
+          {
+            "id": "final_result_ready",
+            "type": "validator",
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "web_research_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "brief", "snapshot", "decisions", "reviewer_findings", "critique", "final_result", "report_data", "limitations"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "brief": {"type": "object"},
+                    "snapshot": {"type": "object", "required": ["attachment_id", "filename", "sha256", "bundle_receipt", "request_id", "source_ids"]},
+                    "decisions": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "publications": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                              "decision": {"enum": ["include", "exclude", "uncertain"], "type": "string"},
+                              "reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "categories": {
+                                "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "evidence": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                                  },
+                                  "required": ["quote"],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "type": "array"
+                              },
+                              "limitations": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              }
+                            },
+                            "required": ["source_id", "decision", "reason", "categories", "evidence", "limitations"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        },
+                        "events": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "event_id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "description": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "technology": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "task": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "object": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "time": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "evidence_level": {"enum": ["statement", "laboratory", "field", "operational", "not_established"], "type": "string"},
+                              "companies": {"items": {"additionalProperties": false, "properties": {"name": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}, "role": {"enum": ["developer", "adopter", "partner"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["name", "role", "source_id", "quote"], "type": "object"}, "maxItems": 20, "type": "array"},
+                              "adoption": {"anyOf": [{"additionalProperties": false, "properties": {"stage": {"enum": ["announced", "pilot", "deployed"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["stage", "source_id", "quote"], "type": "object"}, {"type": "null"}]},
+                              "categories": {
+                                "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "limitations": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "source_ids": {
+                                "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "evidence": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                    "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                                  },
+                                  "required": ["source_id", "quote"],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "merge_reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                            },
+                            "required": ["event_id", "description", "technology", "task", "object", "time", "evidence_level", "categories", "limitations", "source_ids", "evidence", "merge_reason"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["publications", "events"],
+                      "type": "object"
+                    },
+                    "reviewer_findings": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "source_ids": {
+                            "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "event_ids": {
+                            "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                            "maxItems": 20,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "issue": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                          "action": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                        },
+                        "required": ["id", "source_ids", "event_ids", "issue", "action"],
+                        "type": "object"
+                      }
+                    },
+                    "critique": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "reviewed_events": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "event_id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "description": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "technology": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "task": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "object": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "time": {
+                                "anyOf": [
+                                  {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                  {"type": "null"}
+                                ]
+                              },
+                              "evidence_level": {"enum": ["statement", "laboratory", "field", "operational", "not_established"], "type": "string"},
+                              "companies": {"items": {"additionalProperties": false, "properties": {"name": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}, "role": {"enum": ["developer", "adopter", "partner"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["name", "role", "source_id", "quote"], "type": "object"}, "maxItems": 20, "type": "array"},
+                              "adoption": {"anyOf": [{"additionalProperties": false, "properties": {"stage": {"enum": ["announced", "pilot", "deployed"], "type": "string"}, "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"}, "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}}, "required": ["stage", "source_id", "quote"], "type": "object"}, {"type": "null"}]},
+                              "categories": {
+                                "items": {"maxLength": 200, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "limitations": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "source_ids": {
+                                "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "evidence": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                    "quote": {"maxLength": 12000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                                  },
+                                  "required": ["source_id", "quote"],
+                                  "type": "object"
+                                },
+                                "maxItems": 20,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "merge_reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                            },
+                            "required": ["event_id", "description", "technology", "task", "object", "time", "evidence_level", "categories", "limitations", "source_ids", "evidence", "merge_reason"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        },
+                        "date_assessments": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "source_id": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                              "assessment": {"enum": ["accepted", "rejected"], "type": "string"},
+                              "reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                            },
+                            "required": ["source_id", "assessment", "reason"],
+                            "type": "object"
+                          },
+                          "maxItems": 20,
+                          "type": "array"
+                        },
+                        "correction_cycle": {"maximum": 1, "minimum": 0, "type": "integer"},
+                        "notes": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "source_ids": {
+                                "items": {"pattern": "^[0-9a-f]{64}(?![\\s\\S])", "type": "string"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "event_ids": {
+                                "items": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                                "maxItems": 20,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "issue": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "action": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"},
+                              "resolution": {"enum": ["resolved", "unresolved"], "type": "string"},
+                              "resolution_reason": {"maxLength": 4000, "minLength": 1, "type": "string", "pattern": "^(?![\\s\\S]*\\x00)\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"}
+                            },
+                            "required": ["id", "source_ids", "event_ids", "issue", "action", "resolution", "resolution_reason"],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["correction_cycle", "notes", "date_assessments", "reviewed_events"],
+                      "type": "object"
+                    },
+                    "final_result": {
+                      "type": "object",
+                      "required": ["attachment_id", "filename", "sha256", "publication_count", "event_count", "request_id"],
+                      "properties": {
+                        "attachment_id": {"type": "string", "minLength": 1},
+                        "filename": {"type": "string", "pattern": "\\.json(?![\\s\\S])"},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"},
+                        "publication_count": {"type": "integer", "minimum": 0},
+                        "event_count": {"type": "integer", "minimum": 0},
+                        "request_id": {"type": "string", "minLength": 1}
+                      }
+                    },
+                    "report_data": {
+                      "type": "object",
+                      "required": ["project_id", "run_id", "result_id", "result_version", "title"],
+                      "properties": {
+                        "project_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?![\\s\\S])"},
+                        "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?![\\s\\S])"},
+                        "result_id": {"type": "string", "minLength": 1},
+                        "result_version": {"type": "string", "minLength": 1},
+                        "title": {"type": "string", "minLength": 1},
+                        "answer": {"type": "string"},
+                        "tables": {"type": "array"},
+                        "sources": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["id", "title", "url", "published_date", "search_published_date", "selected_published_date", "date_basis", "date_limitation"],
+                            "properties": {
+                              "id": {"type": "string", "minLength": 1},
+                              "title": {"type": "string", "minLength": 1},
+                              "url": {"type": ["string", "null"]},
+                              "date_basis": {"enum": ["extract", "search", null]},
+                              "date_limitation": {"type": ["string", "null"]},
+                              "published_date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"},
+                              "search_published_date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"},
+                              "selected_published_date": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\\s\\S])"}
+                            }
+                          }
+                        },
+                        "limitations": {"type": "array"},
+                        "metadata": {
+                          "type": "object",
+                          "required": ["topic", "period", "conditions", "publication_count", "event_count", "categories"],
+                          "properties": {
+                            "topic": {"type": "string", "minLength": 1},
+                            "period": {"type": "string", "minLength": 1},
+                            "conditions": {"type": "string", "minLength": 1},
+                            "publication_count": {"type": "integer", "minimum": 0},
+                            "event_count": {"type": "integer", "minimum": 0},
+                            "categories": {"type": "array"}
+                          }
+                        }
+                      }
+                    },
+                    "limitations": {"type": "array"}
+                  }
+                }
+              },
+              {"kind": "value_relation", "key": "web_research_result.brief", "other_key": "news_brief.brief", "operator": "equals"},
+              {"kind": "value_relation", "key": "web_research_result.snapshot.sha256", "other_key": "web_review.snapshot_sha256", "operator": "equals"},
+              {"kind": "value_relation", "key": "web_research_result.reviewer_findings", "other_key": "web_review.findings", "operator": "equals"},
+              {
+                "kind": "value_relation",
+                "key": "web_research_result.critique.notes",
+                "other_key": "web_review.findings",
+                "operator": "same_item_ids",
+                "fields": ["source_ids", "event_ids", "issue", "action"]
+              },
+              {"kind": "value_relation", "key": "web_research_result.critique.date_assessments", "other_key": "web_review.date_assessments", "operator": "equals"},
+              {"kind": "value_relation", "key": "web_research_result.critique.reviewed_events", "other_key": "web_review.reviewed_events", "operator": "equals"}
+            ]
+          },
+          {
+            "id": "render_news_report",
+            "type": "phase",
+            "phase_label": "output",
+            "label": "Файлы новостного отчёта",
+            "task_type": "news_render_report",
+            "description": "task_type=news_render_report. Получи GET web_research_result.final_result через attachment_presign_get и передай source_artifacts=[{url,expected_sha256:final_result.sha256}] в render_report вместе с report_data envelope. Используй news 1.2.0 и brief.formats, отдельный PUT для каждого файла и manifest. Сохрани точные source_artifacts renderer; не копируй факты через LLM. report_data.result_version — непустая JSON-строка. Факты renderer читает только из сохранённых source_artifacts; результат source_artifacts передай ссылкой на полный массив renderer. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+            "agent_selection": "direct",
+            "agent_type": "report_builder",
+            "reads": ["user_prompt", "news_brief", "web_research_result"],
+            "writes": ["report_result"],
+            "max_retries": 1
+          },
+          {
+            "id": "report_ready",
+            "type": "validator",
+            "checks": [
+              {
+                "kind": "json_schema",
+                "key": "report_result",
+                "json_schema": {
+                  "type": "object",
+                  "required": ["status", "template", "manifest_attachment_id", "formats", "result_sha256", "source_artifacts"],
+                  "properties": {
+                    "status": {"const": "ok"},
+                    "template": {"type": "object", "required": ["id", "version"], "properties": {"id": {"const": "news"}, "version": {"const": "1.2.0"}}},
+                    "manifest_attachment_id": {"type": "string", "minLength": 1},
+                    "formats": {
+                      "type": "object",
+                      "required": ["json", "html", "csv", "pdf"],
+                      "minProperties": 4,
+                      "maxProperties": 4,
+                      "properties": {
+                        "json": {"type": "object", "required": ["status"], "properties": {"status": {"const": "ready"}}},
+                        "html": {"type": "object", "required": ["status"], "properties": {"status": {"const": "ready"}}},
+                        "csv": {"type": "object", "required": ["status"], "properties": {"status": {"const": "ready"}}},
+                        "pdf": {"type": "object", "required": ["status"], "properties": {"status": {"const": "ready"}}}
+                      },
+                      "additionalProperties": false
+                    },
+                    "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"},
+                    "source_artifacts": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 1,
+                      "items": {"type": "object", "required": ["sha256"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])"}}}
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "value_relation",
+                "key": "report_result.source_artifacts.0.sha256",
+                "other_key": "web_research_result.final_result.sha256",
+                "operator": "equals"
+              }
+            ]
+          },
+          {"id": "publish_report", "type": "deploy", "label": "Публикация HTML-отчёта", "phase_label": "deployment", "html_from": "report_result.formats.html.attachment_id"},
+          {"id": "end", "type": "end"}
+        ],
+        "edges": [
+          {"from": "start", "to": "prepare_brief"},
+          {"from": "prepare_brief", "to": "brief_ready"},
+          {"from": "brief_ready", "to": "approve_brief", "condition": "approved"},
+          {"from": "brief_ready", "to": "prepare_brief", "condition": "rejected"},
+          {"from": "approve_brief", "to": "research_snapshot", "condition": "approved"},
+          {"from": "approve_brief", "to": "prepare_brief", "condition": "rejected"},
+          {"from": "research_snapshot", "to": "research_ready"},
+          {"from": "research_ready", "to": "review_snapshot", "condition": "approved"},
+          {"from": "research_ready", "to": "research_snapshot", "condition": "rejected"},
+          {"from": "review_snapshot", "to": "review_ready"},
+          {"from": "review_ready", "to": "finalize_news", "condition": "approved"},
+          {"from": "review_ready", "to": "review_snapshot", "condition": "rejected"},
+          {"from": "finalize_news", "to": "final_result_ready"},
+          {"from": "final_result_ready", "to": "render_news_report", "condition": "approved"},
+          {"from": "render_news_report", "to": "report_ready"},
+          {"from": "report_ready", "to": "publish_report", "condition": "approved"},
+          {"from": "publish_report", "to": "end"},
+          {"from": "report_ready", "to": "render_news_report", "condition": "rejected"}
+        ]
+      }
+    ],
+    "tools": [],
+    "run_configurations": [],
+    "a2a_servers": []
+  }
+}

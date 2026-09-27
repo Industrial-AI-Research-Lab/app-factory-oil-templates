@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>{{ data.title }}</title>
+<style>
+@page { size: A4; margin: 18mm; @bottom-center { content: counter(page); } }
+body { font: 11pt 'DejaVu Sans', sans-serif; color: #172b3a; overflow-wrap: anywhere; }
+h1 { color: {{ style.accent }}; font-size: 22pt; } h2 { font-size: 15pt; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 12px 0; }
+thead { display: table-header-group; } th, td { border: 1px solid #b8c5cf; padding: 5px; vertical-align: top; overflow-wrap: anywhere; }
+th { background: #eaf0f4; } p, td { white-space: pre-wrap; } .identity { font-size: 9pt; color: #536675; }
+.knowledge-graph { width: 100%; height: auto; border: 1px solid #b8c5cf; background: #f8fbfd; }
+.graph-edge { fill: none; stroke: #7a8e9d; stroke-width: 1.5; }
+.graph-edge-label { fill: #536675; font-size: 10px; text-anchor: middle; }
+.graph-node { fill: {{ style.accent }}; stroke: #fff; stroke-width: 2; }
+.graph-node-label { fill: #172b3a; font-size: 11px; text-anchor: middle; }
+</style></head><body>
+<h1>{{ style.heading }}</h1><h2>{{ data.title }}</h2>
+<p class="identity">{{ data.project_id }} / {{ data.run_id }} / {{ data.result_id }} · <strong>Версия результата:</strong> {{ data.result_version }}</p>
+{% for label, value in metadata %}<p><strong>{{ label }}:</strong> {{ value }}</p>{% endfor %}
+<p>{{ data.answer }}</p>
+<section id="subgraph"><h2>Подграф</h2>
+{% if graph %}<svg class="knowledge-graph" viewBox="0 0 {{ graph.width }} {{ graph.height }}" role="img" aria-labelledby="graph-title graph-description">
+<title id="graph-title">Подграф результата</title><desc id="graph-description">{{ graph.nodes|length }} узлов, {{ graph.edges|length }} связей. Точные данные приведены в таблицах ниже.</desc>
+<defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7a8e9d"/></marker></defs>
+{% for edge in graph.edges %}<path class="graph-edge" d="{{ edge.path }}" marker-end="url(#graph-arrow)"/><text class="graph-edge-label" x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.label }}</text>{% endfor %}
+{% for node in graph.nodes %}<circle class="graph-node" cx="{{ node.x }}" cy="{{ node.y }}" r="28"/><text class="graph-node-label" x="{{ node.x }}" y="{{ node.y + 43 }}">{{ node.label }}</text>{% endfor %}
+</svg>
+<h3>Узлы</h3><table><thead><tr><th>ID</th><th>Название</th><th>Тип</th><th>Источники</th></tr></thead><tbody>
+{% for node in graph.nodes %}<tr><td>{{ node.id }}</td><td>{{ node.label }}</td><td>{{ node.type }}</td><td>{{ node.source_ids|join(', ') or missing }}</td></tr>{% endfor %}
+</tbody></table>
+<h3>Связи</h3><table><thead><tr><th>ID</th><th>Узлы</th><th>Связь</th><th>Источники</th></tr></thead><tbody>
+{% for edge in graph.edges %}<tr><td>{{ edge.id }}</td><td>{{ edge.source }} → {{ edge.target }}</td><td>{{ edge.label }}</td><td>{{ edge.source_ids|join(', ') or missing }}</td></tr>{% else %}<tr><td colspan="4">{{ missing }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p>{{ missing }}</p>{% endif %}</section>
+{% for table in data.tables %}<h2>{{ table.title }}</h2>
+<table><thead><tr>{% for column in table.columns %}<th>{{ column.label }}{% if column.unit is not none %} ({{ column.unit }}){% endif %}</th>{% endfor %}<th>Источники</th></tr></thead>
+<tbody>{% for row in table.rows %}<tr>{% for column in table.columns %}<td>{{ row['values'][column.key]|display }}</td>{% endfor %}<td>{{ row.source_ids|join(', ') or missing }}</td></tr>
+{% else %}<tr><td colspan="{{ table.columns|length + 1 }}">{{ missing }}</td></tr>{% endfor %}</tbody></table>
+{% else %}<p>{{ missing }}</p>{% endfor %}
+<h2>Источники</h2>{% for source in data.sources %}<p>{{ source.id }} — {{ source.title }} — {{ source.url|display }}</p>{% else %}<p>{{ missing }}</p>{% endfor %}
+<h2>Ограничения</h2>{% for limitation in data.limitations %}<p>{{ limitation }}</p>{% else %}<p>{{ missing }}</p>{% endfor %}
+</body></html>

@@ -1,0 +1,6 @@
+activity_id;activity_name;volume;measurement;structure;edges;granular_unit
+A1;Site preparation;100;m2;;;
+A2;Foundation pouring;50;m3;;"[[""A1"", ""FS"", 0]]";
+A3;Walls erection;200;m2;;"[[""A2"", ""FS"", 2]]";
+A4;Roofing;120;m2;"[[""R1"", ""Roof section"", 2, 1]]";"[[""A3"", ""FS"", 0]]";
+A5;Finishing works;300;m2;;"[[""A4"", ""FS"", 5], [""A3"", ""SS"", 0]]";"{""code"": ""G5"", ""name"": ""Finishing"", ""measurement"": ""m2"", ""category"": ""civil""}"

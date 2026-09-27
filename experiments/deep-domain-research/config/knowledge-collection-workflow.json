@@ -1,0 +1,647 @@
+{
+  "_id": "knowledge_collection_mcp",
+  "name": "knowledge_collection_mcp",
+  "display_name": "MCP: коллекция знаний по документам",
+  "description": "Утверждённый manifest → ontology approval → validated facts → immutable collection → два cited query → knowledge exports.",
+  "execution_mode": "static",
+  "max_iterations": 40,
+  "run_timeout_seconds": 14400,
+  "is_default": false,
+  "prompts": [
+    {
+      "name": "Коллекция знаний по вложениям",
+      "text": "Построй по приложенным документам онтологию и коллекцию знаний, ответь на два вопроса с точными источниками и подготовь TXT, JSON, HTML, PDF, DOCX и XLSX. Один ответ должен показать связь рецептура → наблюдение → условия → источник."
+    }
+  ],
+  "nodes": [
+    {"id": "start", "type": "start"},
+    {
+      "id": "approve_manifest",
+      "type": "approval_gate",
+      "label": "Утвердить запрос и состав документов",
+      "show_keys": ["user_prompt", "project_attachments"]
+    },
+    {
+      "id": "design_ontology",
+      "type": "phase",
+      "phase_label": "planning",
+      "label": "Индекс и проект онтологии",
+      "task_type": "knowledge_design_ontology",
+      "description": "По утверждённым вложениям построить immutable индекс, прочитать репрезентативные fragments и сохранить validated ontology version. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+      "agent_selection": "direct",
+      "agent_type": "ontology_designer",
+      "reads": ["user_prompt", "project_attachments", "workflow_approval", "ontology_result", "conversation_history"],
+      "writes": ["ontology_result"],
+      "max_retries": 1,
+      "max_tool_failures": 3
+    },
+    {
+      "id": "ontology_ready",
+      "type": "validator",
+      "max_reject_retries": 2,
+      "checks": [
+        {
+          "kind": "json_schema",
+          "key": "ontology_result",
+          "json_schema": {
+            "type": "object",
+            "required": ["status", "manifest", "index", "ontology", "coverage"],
+            "properties": {
+              "status": {"const": "ok"},
+              "manifest": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["attachment_id", "filename"],
+                  "properties": {"attachment_id": {"type": "string", "minLength": 1}, "filename": {"type": "string", "minLength": 1}},
+                  "additionalProperties": false
+                }
+              },
+              "index": {
+                "type": "object",
+                "required": ["attachment_id", "filename", "sha256"],
+                "properties": {
+                  "attachment_id": {"type": "string", "minLength": 1},
+                  "filename": {"type": "string", "pattern": "\\.sqlite3$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+              },
+              "ontology": {
+                "type": "object",
+                "required": ["attachment_id", "filename", "ontology_id", "version", "base_version", "sha256"],
+                "properties": {
+                  "attachment_id": {"type": "string", "minLength": 1},
+                  "filename": {"type": "string", "pattern": "\\.json$"},
+                  "ontology_id": {"type": "string", "minLength": 1},
+                  "version": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})$"},
+                  "base_version": {"type": ["string", "null"], "pattern": "^(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})\\.(0|[1-9][0-9]{0,17})$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+              },
+              "coverage": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["approved_documents", "indexed_documents", "fragments_read", "validated"],
+                  "properties": {
+                    "approved_documents": {"type": "integer", "minimum": 1},
+                    "indexed_documents": {"type": "integer", "minimum": 1},
+                    "fragments_read": {"type": "integer", "minimum": 1},
+                    "validated": {"const": true}
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "refine_checks": [
+        {"kind": "value_relation", "key": "ontology_result.ontology.base_version", "other_key": "refine_previous.ontology.version", "operator": "equals"},
+        {
+          "kind": "value_relation",
+          "key": "ontology_result.ontology.version",
+          "other_key": "refine_previous.ontology.version",
+          "operator": "semantic_version_greater"
+        }
+      ]
+    },
+    {"id": "approve_ontology", "type": "approval_gate", "label": "Утвердить версию онтологии", "show_keys": ["ontology_result"]},
+    {
+      "id": "build_collection",
+      "type": "phase",
+      "phase_label": "execution",
+      "label": "Проверяемые факты и коллекция",
+      "task_type": "knowledge_build_collection",
+      "description": "Обработать весь manifest по утверждённой ontology: по каждому документу 2–3 раза search_documents и 4–6 самых содержательных fragments, ориентир 5–15 фактов на документ со связями и наблюдениями; один fact batch на 2–3 документа, не менее двух validated fact batch; собрать одну immutable collection. Технические поля approved_ontology должны совпадать с утверждённой версией workflow_approval; используй ссылки на сохранённые значения. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+      "agent_selection": "direct",
+      "agent_type": "collection_builder",
+      "reads": ["user_prompt", "ontology_result", "workflow_approval", "conversation_history"],
+      "writes": ["collection_result"],
+      "max_retries": 1,
+      "max_tool_failures": 6
+    },
+    {
+      "id": "collection_ready",
+      "type": "validator",
+      "max_reject_retries": 2,
+      "checks": [
+        {
+          "kind": "json_schema",
+          "key": "collection_result",
+          "json_schema": {
+            "type": "object",
+            "required": ["status", "approved_ontology", "source_coverage", "fact_batches", "collection", "inspection"],
+            "properties": {
+              "status": {"const": "ok"},
+              "source_coverage": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["source_id", "fragment_ids", "fact_count", "status"],
+                  "properties": {
+                    "source_id": {"type": "string", "minLength": 1},
+                    "fragment_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                    "fact_count": {"type": "integer", "minimum": 0},
+                    "status": {"enum": ["facts", "no_supported_facts"]},
+                    "reason": {"type": "string", "minLength": 1, "pattern": "\\S"}
+                  },
+                  "allOf": [
+                    {"if": {"properties": {"status": {"const": "facts"}}}, "then": {"properties": {"fact_count": {"minimum": 1}, "fragment_ids": {"minItems": 1}}}},
+                    {"if": {"properties": {"status": {"const": "no_supported_facts"}}}, "then": {"required": ["reason"], "properties": {"fact_count": {"const": 0}}}}
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "fact_batches": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "required": ["attachment_id", "filename", "sha256", "fact_count"],
+                  "properties": {
+                    "attachment_id": {"type": "string", "minLength": 1},
+                    "filename": {"type": "string", "minLength": 1},
+                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "fact_count": {"type": "integer", "minimum": 1}
+                  }
+                }
+              },
+              "collection": {
+                "type": "object",
+                "required": ["attachment_id", "filename", "sha256", "counts", "fingerprints"],
+                "properties": {
+                  "attachment_id": {"type": "string", "minLength": 1},
+                  "filename": {"type": "string", "pattern": "\\.sqlite3$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "counts": {
+                    "type": "object",
+                    "required": ["nodes", "relations", "observations", "fragments", "source_status"],
+                    "properties": {
+                      "nodes": {"type": "integer", "minimum": 0},
+                      "relations": {"type": "integer", "minimum": 0},
+                      "observations": {"type": "integer", "minimum": 0},
+                      "fragments": {"type": "integer", "minimum": 0},
+                      "source_status": {"type": "integer", "minimum": 0}
+                    }
+                  },
+                  "fingerprints": {
+                    "type": "object",
+                    "required": ["index_sha256", "ontology_sha256", "fact_batch_sha256s", "input_fingerprint"],
+                    "properties": {
+                      "index_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                      "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                      "fact_batch_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                      "input_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  }
+                }
+              },
+              "approved_ontology": {
+                "type": "object",
+                "required": ["ontology_id", "version", "sha256"],
+                "properties": {
+                  "ontology_id": {"type": "string", "minLength": 1},
+                  "version": {"type": "string", "minLength": 1},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+              },
+              "inspection": {
+                "type": "object",
+                "required": ["status", "schema_version", "ontology_id", "ontology_version", "collection_sha256", "counts", "input_checksums", "tables"],
+                "properties": {
+                  "status": {"const": "ok"},
+                  "schema_version": {"const": 1},
+                  "ontology_id": {"type": "string", "minLength": 1},
+                  "ontology_version": {"type": "string", "minLength": 1},
+                  "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "counts": {
+                    "type": "object",
+                    "required": ["nodes", "relations", "observations", "fragments", "source_status"],
+                    "properties": {
+                      "nodes": {"type": "integer", "minimum": 0},
+                      "relations": {"type": "integer", "minimum": 0},
+                      "observations": {"type": "integer", "minimum": 0},
+                      "fragments": {"type": "integer", "minimum": 0},
+                      "source_status": {"type": "integer", "minimum": 0}
+                    }
+                  },
+                  "input_checksums": {
+                    "type": "object",
+                    "required": ["index_sha256", "ontology_sha256", "fact_batch_sha256s", "input_fingerprint"],
+                    "properties": {
+                      "index_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                      "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                      "fact_batch_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+                      "input_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "tables": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": ["name", "columns"],
+                      "properties": {"name": {"type": "string", "minLength": 1}, "columns": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "collection_result.source_coverage",
+          "id_field": "source_id",
+          "other_key": "ontology_result.manifest",
+          "other_id_field": "attachment_id"
+        },
+        {
+          "kind": "json_schema",
+          "key": "workflow_approval",
+          "json_schema": {
+            "type": "object",
+            "required": ["status", "gate_node_id"],
+            "properties": {"status": {"const": "approved"}, "gate_node_id": {"const": "approve_ontology"}}
+          }
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.approved_ontology.ontology_id",
+          "other_key": "workflow_approval.data.agent_result.output.ontology.ontology_id",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.approved_ontology.version",
+          "other_key": "workflow_approval.data.agent_result.output.ontology.version",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.approved_ontology.sha256",
+          "other_key": "workflow_approval.data.agent_result.output.ontology.sha256",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.collection.sha256",
+          "other_key": "collection_result.inspection.collection_sha256",
+          "operator": "equals"
+        },
+        {"kind": "value_relation", "key": "collection_result.collection.counts", "other_key": "collection_result.inspection.counts", "operator": "equals"},
+        {
+          "kind": "value_relation",
+          "key": "collection_result.collection.fingerprints",
+          "other_key": "collection_result.inspection.input_checksums",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.collection.fingerprints.ontology_sha256",
+          "other_key": "collection_result.approved_ontology.sha256",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.collection.fingerprints.index_sha256",
+          "other_key": "ontology_result.index.sha256",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.inspection.ontology_id",
+          "other_key": "collection_result.approved_ontology.ontology_id",
+          "operator": "equals"
+        },
+        {
+          "kind": "value_relation",
+          "key": "collection_result.inspection.ontology_version",
+          "other_key": "collection_result.approved_ontology.version",
+          "operator": "equals"
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "collection_result.fact_batches",
+          "id_field": "attachment_id",
+          "other_key": "collection_result.fact_batches",
+          "other_id_field": "attachment_id"
+        }
+      ]
+    },
+    {
+      "id": "analyze_collection",
+      "type": "phase",
+      "phase_label": "execution",
+      "label": "Ответы на вопросы по коллекции",
+      "task_type": "knowledge_analyze_collection",
+      "description": "Выполнить два read-only запроса к одной collection с citations, сохранить третий запрос связей для графа фактов и подготовить typed knowledge report payload с точной копией answers. report_data.result_version, metadata.schema_version и metadata.collection_version — непустые JSON-строки. Результаты query сохраняй как JSON-артефакты; report_data содержит envelope и точную копию answers; факты renderer получает через source_artifacts. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+      "agent_selection": "direct",
+      "agent_type": "collection_analyst",
+      "reads": ["user_prompt", "ontology_result", "collection_result"],
+      "writes": ["analysis_result"],
+      "max_retries": 1,
+      "max_tool_failures": 3
+    },
+    {
+      "id": "analysis_ready",
+      "type": "validator",
+      "max_reject_retries": 2,
+      "checks": [
+        {
+          "kind": "json_schema",
+          "key": "analysis_result",
+          "json_schema": {
+            "type": "object",
+            "required": ["status", "collection_sha256", "answers", "query_results", "fact_graph", "report_data"],
+            "properties": {
+              "status": {"const": "ok"},
+              "answers": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "required": ["question", "answer", "source_refs"],
+                  "properties": {
+                    "question": {"type": "string", "minLength": 1},
+                    "answer": {"type": "string", "minLength": 1},
+                    "source_refs": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "object",
+                        "required": ["source_id", "fragment_id"],
+                        "properties": {"source_id": {"type": "string", "minLength": 1}, "fragment_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+                      }
+                    }
+                  }
+                }
+              },
+              "query_results": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "required": ["attachment_id", "filename", "sha256", "question", "sql", "collection_sha256", "row_count", "truncated", "source_refs"],
+                  "properties": {
+                    "attachment_id": {"type": "string", "minLength": 1},
+                    "filename": {"type": "string", "pattern": "\\.json$"},
+                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "question": {"type": "string", "minLength": 1},
+                    "sql": {"type": "string", "minLength": 1},
+                    "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "row_count": {"type": "integer", "minimum": 0},
+                    "truncated": {"type": "boolean"},
+                    "source_refs": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "object",
+                        "required": ["source_id", "fragment_id"],
+                        "properties": {"source_id": {"type": "string", "minLength": 1}, "fragment_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+                      }
+                    }
+                  },
+                  "allOf": [{"if": {"properties": {"row_count": {"minimum": 1}}}, "then": {"properties": {"source_refs": {"minItems": 1}}}}]
+                }
+              },
+              "report_data": {
+                "type": "object",
+                "required": ["project_id", "run_id", "result_id", "result_version", "title", "metadata", "answers"],
+                "properties": {
+                  "project_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+                  "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+                  "result_id": {"type": "string", "minLength": 1},
+                  "result_version": {"type": "string", "minLength": 1},
+                  "title": {"type": "string", "minLength": 1},
+                  "answer": {"type": "string"},
+                  "tables": {"type": "array"},
+                  "sources": {"type": "array"},
+                  "limitations": {"type": "array"},
+                  "metadata": {
+                    "type": "object",
+                    "required": ["question", "schema_version", "collection_version"],
+                    "properties": {"question": {"type": "string"}, "schema_version": {"type": "string"}, "collection_version": {"type": "string"}}
+                  },
+                  "graph": {"type": "object"},
+                  "answers": {"type": "array", "minItems": 1}
+                }
+              },
+              "fact_graph": {
+                "type": "object",
+                "required": ["attachment_id", "filename", "sha256", "sql", "collection_sha256", "row_count", "truncated"],
+                "properties": {
+                  "attachment_id": {"type": "string", "minLength": 1},
+                  "filename": {"type": "string", "pattern": "\\.json$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "sql": {"type": "string", "minLength": 1},
+                  "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "row_count": {"type": "integer", "minimum": 0},
+                  "truncated": {"type": "boolean"}
+                }
+              },
+              "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        },
+        {"kind": "value_relation", "key": "analysis_result.collection_sha256", "other_key": "collection_result.collection.sha256", "operator": "equals"},
+        {"kind": "value_relation", "key": "analysis_result.fact_graph.collection_sha256", "other_key": "analysis_result.collection_sha256", "operator": "equals"},
+        {
+          "kind": "id_set_equals",
+          "key": "analysis_result.report_data.answers",
+          "id_field": "question",
+          "other_key": "analysis_result.answers",
+          "other_id_field": "question",
+          "fields": ["answer", "source_refs"]
+        },
+        {
+          "kind": "value_relation",
+          "key": "analysis_result.query_results",
+          "other_key": "analysis_result.collection_sha256",
+          "operator": "all_equal",
+          "field": "collection_sha256"
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "analysis_result.answers",
+          "id_field": "question",
+          "other_key": "analysis_result.query_results",
+          "other_id_field": "question",
+          "fields": ["source_refs"]
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "analysis_result.query_results",
+          "id_field": "attachment_id",
+          "other_key": "analysis_result.query_results",
+          "other_id_field": "attachment_id"
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "analysis_result.query_results",
+          "id_field": "sql",
+          "other_key": "analysis_result.query_results",
+          "other_id_field": "sql"
+        },
+        {
+          "kind": "id_set_equals",
+          "key": "analysis_result.query_results",
+          "id_field": "sha256",
+          "other_key": "analysis_result.query_results",
+          "other_id_field": "sha256"
+        }
+      ]
+    },
+    {
+      "id": "render_report",
+      "type": "phase",
+      "phase_label": "output",
+      "label": "Файлы результата",
+      "task_type": "knowledge_render_report",
+      "description": "Получить GET сохранённых query_results, отрендерить их вместе с утверждённой ontology (role=ontology) и запросом связей (role=fact_graph) через source_artifacts шаблоном knowledge 1.3.0 и сохранить шесть реально готовых форматов. report_data.result_version — непустая JSON-строка. Факты renderer читает только из сохранённых source_artifacts; результат source_artifacts передай ссылкой на полный массив renderer. Технические значения в аргументах инструментов и итоговом JSON выбирай через выданные backend ссылки {\"$value_ref\":\"<id>\"}; backend подставляет исходные значения до проверки схемы и сохранения. Не реконструируй URL, SHA-256, receipt или сохранённые объекты. GET служит для чтения, PUT — только для загрузки; URL передаются ссылками в инструмент, а не в текст для пользователя.",
+      "agent_selection": "direct",
+      "agent_type": "report_builder",
+      "reads": ["user_prompt", "ontology_result", "collection_result", "analysis_result"],
+      "writes": ["report_result"],
+      "max_retries": 1,
+      "max_tool_failures": 3
+    },
+    {
+      "id": "report_ready",
+      "type": "validator",
+      "max_reject_retries": 2,
+      "checks": [
+        {
+          "kind": "json_schema",
+          "key": "report_result",
+          "json_schema": {
+            "type": "object",
+            "required": ["status", "template", "manifest_attachment_id", "formats", "result_sha256", "collection_sha256", "source_artifacts", "ontology_sha256", "fact_graph_sha256"],
+            "properties": {
+              "status": {"const": "ok"},
+              "template": {"type": "object", "required": ["id", "version"], "properties": {"id": {"const": "knowledge"}, "version": {"const": "1.3.0"}}},
+              "ontology_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "fact_graph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "manifest_attachment_id": {"type": "string", "minLength": 1},
+              "formats": {
+                "type": "object",
+                "required": ["txt", "json", "html", "pdf", "docx", "xlsx"],
+                "additionalProperties": false,
+                "properties": {
+                  "txt": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "json": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "html": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "pdf": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "docx": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  },
+                  "xlsx": {
+                    "type": "object",
+                    "required": ["status", "attachment_id", "filename", "size_bytes", "sha256"],
+                    "properties": {
+                      "status": {"const": "ready"},
+                      "attachment_id": {"type": "string", "minLength": 1},
+                      "filename": {"type": "string", "minLength": 1},
+                      "size_bytes": {"type": "integer", "minimum": 1},
+                      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                  }
+                }
+              },
+              "result_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "collection_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "source_artifacts": {
+                "type": "array",
+                "minItems": 2,
+                "items": {"type": "object", "required": ["sha256"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+              }
+            }
+          }
+        },
+        {"kind": "value_relation", "key": "report_result.collection_sha256", "other_key": "collection_result.collection.sha256", "operator": "equals"},
+        {"kind": "value_relation", "key": "report_result.ontology_sha256", "other_key": "collection_result.inspection.input_checksums.ontology_sha256", "operator": "equals"},
+        {"kind": "value_relation", "key": "report_result.fact_graph_sha256", "other_key": "analysis_result.fact_graph.sha256", "operator": "equals"},
+        {
+          "kind": "id_set_equals",
+          "key": "report_result.source_artifacts",
+          "id_field": "sha256",
+          "other_key": "analysis_result.query_results",
+          "other_id_field": "sha256"
+        }
+      ]
+    },
+    {"id": "publish_report", "type": "deploy", "label": "Публикация HTML-отчёта", "phase_label": "deployment", "html_from": "report_result.formats.html.attachment_id"},
+    {"id": "end", "type": "end"}
+  ],
+  "edges": [
+    {"from": "start", "to": "approve_manifest"},
+    {"from": "approve_manifest", "to": "design_ontology", "condition": "approved"},
+    {"from": "approve_manifest", "to": "end", "condition": "rejected"},
+    {"from": "design_ontology", "to": "ontology_ready"},
+    {"from": "ontology_ready", "to": "approve_ontology", "condition": "approved"},
+    {"from": "ontology_ready", "to": "design_ontology", "condition": "rejected"},
+    {"from": "approve_ontology", "to": "build_collection", "condition": "approved"},
+    {"from": "approve_ontology", "to": "design_ontology", "condition": "rejected"},
+    {"from": "build_collection", "to": "collection_ready"},
+    {"from": "collection_ready", "to": "analyze_collection", "condition": "approved"},
+    {"from": "collection_ready", "to": "build_collection", "condition": "rejected"},
+    {"from": "analyze_collection", "to": "analysis_ready"},
+    {"from": "analysis_ready", "to": "render_report", "condition": "approved"},
+    {"from": "analysis_ready", "to": "analyze_collection", "condition": "rejected"},
+    {"from": "render_report", "to": "report_ready"},
+    {"from": "report_ready", "to": "publish_report", "condition": "approved"},
+    {"from": "publish_report", "to": "end"},
+    {"from": "report_ready", "to": "render_report", "condition": "rejected"}
+  ]
+}

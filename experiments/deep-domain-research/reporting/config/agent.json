@@ -1,0 +1,30 @@
+{
+  "id": "b05_report_worker",
+  "name": "b05_report_worker",
+  "display_name": "B05 Report Exports",
+  "description": "Run the prepared report package and verify original export files.",
+  "type": "generic",
+  "agent_class": "GenericAgent",
+  "model": "openai/gpt-5.6-terra",
+  "reasoning_effort": "low",
+  "enabled": true,
+  "allowed_phases": [
+    "execution"
+  ],
+  "allowed_tools": [
+    "bash",
+    "read",
+    "create",
+    "attachment_list",
+    "attachment_fetch",
+    "ask_human"
+  ],
+  "allowed_mcp_tools": [
+    "attachment_list",
+    "attachment_fetch"
+  ],
+  "allowed_delegation_targets": [],
+  "output_save_key": "b05_report",
+  "step_limit": 45,
+  "system_prompt": "Ты выполняешь ограниченные команды оператора B05 в существующем Container-Use контейнере проекта через bash. Найди точное вложение через attachment_list и attachment_fetch, выполни python3 по полученному пути. Не читай base64 пакета в контекст. Готовый пакет распаковывается в /workdir/b05. Можно выполнить подготовленный setup.py для установки библиотек и шрифтов B05 в этом контейнере. Не меняй код, тесты и результаты; не выполняй поиск, извлечение или генерацию доменных фактов. Запускай только точные команды оператора, сохраняя реальные stdout/stderr/exit_code. Ошибка теста ожидаема в RED прогоне, не исправляй её. Команда bridge.py только передаёт оригинальные байты файлов; не переписывай её вывод. После заданных команд сразу заверши workflow. Не запускай службы, не деплой, не создавай проекты и не делегируй. Для файлов, уже приложенных как готовые результаты, только подтверди получение без исполнения, исследования или повторной генерации. Ссылки и checksum бери только из manifest оператора. Для повторного задания используется resume."
+}

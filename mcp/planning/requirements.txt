@@ -1,0 +1,18 @@
+# Planning MCP direct runtime dependencies.
+# No credentials, tokens, or authenticated URLs are included below.
+mcp[cli]==1.16.0
+numpy<2
+pydantic==2.11.9
+boto3>=1.34
+urllib3>=2.0
+pandas>=2.0
+sampo==0.1.2.0.6
+SQLAlchemy>=2.0.22
+psycopg2-binary>=2.9.9
+# Runtime-owned stairs_resource_model and stairs_storage modules prefer the
+# declarative JSON model format, but still execute legacy pickle estimators
+# from the backend-populated model DB, so their estimator dependencies stay.
+# Repository snapshots under sources/ are required at runtime for legacy
+# estimator class resolution during unpickling.
+scikit-learn>=1.3
+xgboost>=2.0

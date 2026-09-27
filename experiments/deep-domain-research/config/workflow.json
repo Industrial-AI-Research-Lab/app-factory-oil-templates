@@ -1,0 +1,41 @@
+{
+  "id": "b04_container_check_20260914",
+  "name": "b04_container_check_20260914",
+  "description": "B04 container commands and text artifact smoke check; no domain pipeline or deployment.",
+  "execution_mode": "dynamic",
+  "max_iterations": 10,
+  "run_timeout_seconds": 14400,
+  "is_default": false,
+  "nodes": [
+    {
+      "type": "start",
+      "id": "start"
+    },
+    {
+      "phase_label": "execution",
+      "description": "Fetch the operator supplied package, execute explicit B04 verification commands and report actual results.",
+      "task_type": "b04_check",
+      "writes": [
+        "b04_report"
+      ],
+      "agent_selection": "direct",
+      "id": "execute",
+      "agent_type": "b04_container_worker",
+      "type": "phase"
+    },
+    {
+      "type": "end",
+      "id": "end"
+    }
+  ],
+  "edges": [
+    {
+      "to": "execute",
+      "from": "start"
+    },
+    {
+      "to": "end",
+      "from": "execute"
+    }
+  ]
+}

@@ -1,0 +1,207 @@
+name: oil-mcp
+
+services:
+  hiddify-proxy:
+    build:
+      context: ${OIL_MCP_SOURCE:?path to the selected AppFactory checkout}
+      dockerfile: deploy/oil-mcp/hiddify-proxy.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${OIL_MCP_RUNTIME_ENV_DIR:?path to rendered runtime env}/hiddify-proxy.env
+    environment:
+      HIDDIFY_REFRESH_SECONDS: "${OIL_MCP_HIDDIFY_REFRESH_SECONDS:-3600}"
+    ports:
+      - "${OIL_MCP_BIND_ADDRESS:-127.0.0.1}:${OIL_MCP_DOMAIN_RESEARCH_PORT:-8023}:8003"
+    volumes:
+      - hiddify_state:/var/lib/hiddify
+    read_only: true
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--proxy",
+          "http://127.0.0.1:7890",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "15",
+          "--output",
+          "/dev/null",
+          "https://www.gstatic.com/generate_204",
+        ]
+      interval: 10s
+      timeout: 20s
+      retries: 12
+      start_period: 30s
+    networks:
+      - mcp_private
+      - proxy_wan
+
+  docling-mcp:
+    build:
+      context: ${OIL_MCP_SOURCE:?path to the selected AppFactory checkout}
+      dockerfile: deploy/oil-mcp/docling.Dockerfile
+    restart: unless-stopped
+    environment:
+      DOCLING_MCP_CONVERSION_MODE: local
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8000),3); s.close()\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  docling-adapter-mcp:
+    build:
+      context: ${OIL_MCP_SOURCE:?path to the selected AppFactory checkout}
+      dockerfile: deploy/oil-mcp/docling-adapter.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${OIL_MCP_DOCLING_PORT:-8002}:8002"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8002"
+      DOCLING_MCP_URL: "http://docling-mcp:8000/mcp"
+      UPLOAD_TIMEOUT: "300"
+      DOCLING_TIMEOUT: "300"
+    depends_on:
+      docling-mcp:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',8002),3); s.close()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  domain-research-mcp:
+    build:
+      context: ${OIL_MCP_SOURCE:?path to the selected AppFactory checkout}
+      dockerfile: deploy/oil-mcp/domain-research.Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - ${OIL_MCP_RUNTIME_ENV_DIR:?path to rendered runtime env}/domain-research.env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8003"
+      HTTP_PROXY: "http://hiddify-proxy:7890"
+      HTTPS_PROXY: "http://hiddify-proxy:7890"
+      ALL_PROXY: "http://hiddify-proxy:7890"
+      NO_PROXY: "localhost,127.0.0.1,hiddify-proxy"
+    depends_on:
+      hiddify-proxy:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',8003),3); s.close()",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - mcp_private
+
+  reporting-mcp:
+    build:
+      context: ${OIL_MCP_SOURCE:?path to the selected AppFactory checkout}
+      dockerfile: deploy/oil-mcp/reporting.Dockerfile
+      target: production
+    restart: unless-stopped
+    env_file:
+      - ${OIL_MCP_RUNTIME_ENV_DIR:?path to rendered runtime env}/reporting.env
+    ports:
+      - "${OIL_MCP_REPORTING_PORT:-8024}:8004"
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',8004),3); s.close()",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - default
+      - AppFactory-internal
+
+  falkordb-mcp:
+    image: falkordb/mcpserver:1.3.0
+    restart: unless-stopped
+    env_file:
+      - ${OIL_MCP_RUNTIME_ENV_DIR:?path to rendered runtime env}/falkordb.env
+    environment:
+      NODE_ENV: production
+      MCP_TRANSPORT: http
+      MCP_PORT: "8080"
+      FALKORDB_DEFAULT_READONLY: "true"
+      FALKORDB_STRICT_READONLY: "true"
+    ports:
+      - "${OIL_MCP_FALKORDB_PORT:-8025}:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const net=require('net'); const s=net.createConnection({host:'127.0.0.1',port:8080},()=>{s.end();process.exit(0)}); s.setTimeout(2000,()=>{s.destroy();process.exit(1)}); s.on('error',()=>process.exit(1));\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - default
+      - AppFactory-internal
+
+networks:
+  mcp_private:
+    internal: true
+  proxy_wan:
+    driver: bridge
+  AppFactory-internal:
+    external: true
+    name: AppFactory-lab_internal
+
+volumes:
+  hiddify_state:
+    name: ${OIL_MCP_HIDDIFY_VOLUME_NAME:-oil-mcp_hiddify_state}

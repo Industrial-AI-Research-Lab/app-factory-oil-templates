@@ -1,0 +1,41 @@
+{
+  "id": "b05_report_check_20260914",
+  "name": "b05_report_check_20260914",
+  "description": "B05 report generation and original file publication acceptance.",
+  "execution_mode": "dynamic",
+  "max_iterations": 10,
+  "run_timeout_seconds": 14400,
+  "is_default": false,
+  "nodes": [
+    {
+      "type": "start",
+      "id": "start"
+    },
+    {
+      "phase_label": "execution",
+      "description": "Run exact operator commands in the project container.",
+      "task_type": "b05_check",
+      "writes": [
+        "b05_report"
+      ],
+      "agent_selection": "direct",
+      "id": "execute",
+      "agent_type": "b05_report_worker",
+      "type": "phase"
+    },
+    {
+      "type": "end",
+      "id": "end"
+    }
+  ],
+  "edges": [
+    {
+      "to": "execute",
+      "from": "start"
+    },
+    {
+      "to": "end",
+      "from": "execute"
+    }
+  ]
+}

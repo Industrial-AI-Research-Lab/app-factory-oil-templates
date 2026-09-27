@@ -1,0 +1,32 @@
+services:
+  planning:
+    build: .
+    ports:
+      - "127.0.0.1:18082:${PORT:-8080}"
+    environment:
+      PORT: "${PORT:-8080}"
+      PLANNING_CSV_ALLOWED_HOSTS: "${PLANNING_CSV_ALLOWED_HOSTS:-}"
+      PLANNING_CSV_ALLOWED_S3_BUCKETS: "${PLANNING_CSV_ALLOWED_S3_BUCKETS:-}"
+      # Model DB is trusted admin-controlled/read-only; empty values fail closed.
+      RM_ADAPTER_CONN_STR: "${RM_ADAPTER_CONN_STR:-}"
+      # S3 credentials/endpoint for boto3 (see csv compose note: only listed
+      # variables reach the container).
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_ENDPOINT_URL: "${AWS_ENDPOINT_URL:-}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+    # TCP liveness-only check (no readiness claim).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,socket; s=socket.create_connection(('127.0.0.1', int(os.environ.get('PORT', '8080'))), timeout=5); s.close()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
